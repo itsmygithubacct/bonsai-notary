@@ -1,0 +1,16 @@
+# bonsai-notary — Python dependencies for the COMPOSED notary.
+#
+# The notary glue itself is pure Python stdlib. These are the *inference engine* (trinote, pulled in
+# via the ./engine symlink) runtime pins — install them into the engine's uv venv:
+#
+#   cd engine/bonsai && uv venv && uv pip install -r ~/bonsai-notary/requirements_notary.txt
+#
+# The on-chain software (chain_c) is C — built separately with cmake, NOT a pip dependency.
+# The self-managed BSV HD wallet is optional (only if you fund/sign in Python instead of letting
+# chain_c hold keys):  uv pip install -r requirements_wallet.txt
+# Tests need pytest:    uv pip install -r requirements_test.txt
+
+numpy==2.4.6
+safetensors==0.8.0
+# Third-party-verifiable receipt signatures (secp256k1 ECDSA, deterministic RFC 6979); pure Python.
+ecdsa==0.19.2

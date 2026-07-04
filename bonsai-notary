@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# bonsai-notary — the composed deterministic-inference + on-chain-notary launcher.
+#
+# Wires four pieces together at run time:
+#   * inference engine : ./engine          (-> ~/integer_inference_engine ; trinote under bonsai/src)
+#   * on-chain software: ./chain_c         (-> ~/chain_c ; bonsai_third_entry / agentd CLIs)
+#   * on-chain orch.   : ./bsv_third_entry (-> ~/bsv_third_entry ; ChainC backend + agent driver)
+#   * notary glue      : this dir          (wallet, launchers, docs, identity)
+#
+# It runs the engine's run_bonsai_cli through bsv_third_entry.engine_run, which rebinds the
+# --onchain Third Entry backend to chain_c. Generated state + secrets live OUTSIDE the repo under
+# $BONSAI_NOTARY_HOME (default ~/.local/trinote) — the SAME home the engine and chain_c both use.
+#
+# Usage:
+#   bonsai-notary [MODE] [PROMPT] [--receipts] [--onchain] [--verbose] [extra run_bonsai_cli flags...]
+#
+# MODE (default: one-shot):
+#   repl            interactive REPL              — omit PROMPT
+#   json   PROMPT   structured JSON output
+#   (none) PROMPT   one-shot completion
+#
+# Flags:
+#   --receipts      emit a notarized, byte-exact, third-party-verifiable receipt (OFF by default)
+#   --onchain       anchor the receipt's Third Entry via chain_c (DRY-RUN unless --chain-confirm)
+#   --verbose       show engine/timing/receipt diagnostics (json/one-shot are output-only by default)
+#
+# Env:
+#   BONSAI_NOTARY_HOME   shared state/secrets home (default ~/.local/trinote)
+#   BONSAI_ENGINE_DIR    inference-engine checkout (default ./engine)
+#   BONSAI_CHAIN_C_DIR   chain_c checkout         (default ./chain_c)
+#   BONSAI_WEIGHTS_REPO  where to find the model weights (default ~/bonsai-notarized-bitnet)
+#   BONSAI_GPU=0         force CPU (default uses the GPU producer, auto-falls back to CPU)
+#   BONSAI_DRYRUN=1      print the resolved command instead of running it
+set -euo pipefail
+
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- the pieces (env-overridable; symlinks today, GitHub checkouts later) ---
+ENGINE_DIR="${BONSAI_ENGINE_DIR:-$ROOT/engine}"
+CHAIN_C_DIR="${BONSAI_CHAIN_C_DIR:-$ROOT/chain_c}"
+BSV_TE_DIR="${BONSAI_BSV_TE_DIR:-$ROOT/bsv_third_entry}"
+ENGINE_SRC="$ENGINE_DIR/bonsai/src"
+export BONSAI_ENGINE_DIR="$ENGINE_DIR" BONSAI_CHAIN_C_DIR="$CHAIN_C_DIR"
+
+# --- unified state/secrets home (engine receipts/keys AND chain_c key files) ---
+export BONSAI_NOTARY_HOME="${BONSAI_NOTARY_HOME:-$HOME/.local/trinote}"
+
+[ -d "$ENGINE_SRC" ] || { echo "bonsai-notary: engine not found at $ENGINE_SRC (check the 'engine' symlink)" >&2; exit 4; }
+
+PY="$ENGINE_DIR/bonsai/.venv/bin/python"; [ -x "$PY" ] || PY="python3"
+GPU="${BONSAI_GPU:-1}"
+
+[ $# -ge 1 ] || usage 1
+case "$1" in -h|--help|help) usage 0 ;; esac
+
+# Mode: repl | json | (default) one-shot.
+mode="oneshot"
+case "$1" in repl|json) mode="$1"; shift ;; esac
+
+# --receipts / --verbose are notary-level switches; everything else passes through to run_bonsai_cli.
+receipt="--no-receipt"; verbose=0; pre=()
+for a in "$@"; do
+    case "$a" in
+        --receipts|--receipt) receipt="--receipt" ;;
+        --no-receipt)         receipt="--no-receipt" ;;
+        --verbose|-v)         verbose=1 ;;
+        *)                    pre+=("$a") ;;
+    esac
+done
+set -- "${pre[@]+"${pre[@]}"}"
+
+# First bare token is the PROMPT for json/one-shot; REPL takes none.
+prompt_args=()
+if [ "$mode" != "repl" ]; then
+    rest=()
+    for a in "$@"; do
+        if [ ${#prompt_args[@]} -eq 0 ] && [ "${a:0:1}" != "-" ]; then prompt_args=(-p "$a"); else rest+=("$a"); fi
+    done
+    set -- "${rest[@]+"${rest[@]}"}"
+    [ ${#prompt_args[@]} -gt 0 ] || { echo "bonsai-notary: '$mode' needs a PROMPT" >&2; exit 2; }
+fi
+
+# --- resolve model weights from the state home (populated by scripts/fetch_weights.sh) ---
+MODELS_DIR="${BONSAI_MODELS_DIR:-$BONSAI_NOTARY_HOME/models}"
+GGUF="$MODELS_DIR/Bonsai-8B-Q1_0.gguf"
+ARTIFACT="$MODELS_DIR/atlas-notarized-bonsai-8b.safetensors"
+IDENTITY="$ROOT/artifacts/atlas-notarized-bonsai-8b.identity.json"
+
+if [ ! -e "$GGUF" ] && [ ! -e "$ARTIFACT" ]; then
+    echo "bonsai-notary: no weights in $MODELS_DIR — run: ./scripts/fetch_weights.sh" >&2
+    echo "  (set HF_REPO for a real download, or BONSAI_WEIGHTS_REPO to reuse a local checkout)" >&2
+fi
+
+weight_args=()
+[ -e "$GGUF" ]     && weight_args+=(--gguf "$GGUF")
+[ -e "$ARTIFACT" ] && weight_args+=(--artifact "$ARTIFACT")
+[ -e "$IDENTITY" ] && weight_args+=(--identity "$IDENTITY")
+
+gpu_args=(); [ "$GPU" = "1" ] && gpu_args=(--gpu)
+
+case "$mode" in
+    repl)    base=(--fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
+    json)    base=(--json --fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
+    oneshot) base=(--fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
+esac
+
+cmd=("$PY" -m bsv_third_entry.engine_run "${base[@]}" "${weight_args[@]+"${weight_args[@]}"}" "${prompt_args[@]+"${prompt_args[@]}"}" "$@")
+
+# json / one-shot emit only model output unless --verbose; diagnostics go to stderr.
+quiet_stderr=0
+[ "$mode" != "repl" ] && [ "$verbose" = "0" ] && quiet_stderr=1
+
+export PYTHONPATH="$ENGINE_SRC:$BSV_TE_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+if [ "${BONSAI_DRYRUN:-0}" = "1" ]; then
+    note=""; [ "$quiet_stderr" = "1" ] && note=" 2>/dev/null"
+    printf '[bonsai-notary] would run (cwd=%s):' "$ROOT"
+    printf ' %q' BONSAI_NOTARY_HOME="$BONSAI_NOTARY_HOME" PYTHONPATH="$PYTHONPATH" "${cmd[@]}"; printf '%s\n' "$note"
+    exit 0
+fi
+
+# When actually broadcasting the Third Entry (--chain-confirm), make the wallet self-sufficient:
+#   * funding   — draw the action fee from the wallet's OWN derived UTXOs (no hand-picked FUND_* keyfile)
+#   * change    — route change to a FRESH derived address (m/44'/236'/0'/1/i) instead of reusing the Elder
+# Both re-derivable from the mnemonic; a caller-set FUND_ACTION_KEY_FILE / CHANGE_ADDRESS always wins.
+if [[ " $* " == *" --chain-confirm "* ]]; then
+    WPY="$ROOT/.venv/bin/python"; [ -x "$WPY" ] || WPY="$PY"; NW="$ROOT/wallet/notary_wallet.py"
+    if [ -f "$NW" ] && [ -z "${FUND_ACTION_KEY_FILE:-}" ]; then
+        _fk="$("$WPY" "$NW" fund-key --need 12000 --allow-unconfirmed 2>/dev/null || true)"
+        if [ -n "$_fk" ]; then export FUND_ACTION_KEY_FILE="$_fk"; echo "[funding] FUND_ACTION_KEY_FILE → wallet UTXO $_fk" >&2; fi
+    fi
+    if [ -f "$NW" ] && [ -z "${CHANGE_ADDRESS:-}" ]; then
+        _fresh="$("$WPY" "$NW" next-change 2>/dev/null || true)"
+        if [ -n "$_fresh" ]; then export CHANGE_ADDRESS="$_fresh"; echo "[hygiene] change → fresh $_fresh" >&2; fi
+    fi
+fi
+
+cd "$ROOT"
+if [ "$quiet_stderr" = "1" ]; then exec "${cmd[@]}" 2>/dev/null; else exec "${cmd[@]}"; fi

@@ -1,0 +1,4 @@
+# Test/CI dependencies for bonsai-notarized-bitnet (installed into the uv venv).
+# Runtime deps are pulled in from requirements_atlas_notarized.txt; this adds only the test runner.
+-r requirements_atlas_notarized.txt
+pytest==9.1.0
