@@ -1,0 +1,4 @@
+# bonsai-notary self-managed BSV HD wallet — mnemonic, BIP44 derivation, UTXO fan-out, broadcast.
+# Same SDK poorwallet vendors (bsv-sdk → `import bsv`). Managed via uv ONLY (never raw pip).
+bsv-sdk==2.2.0
+requests==2.32.5

@@ -1,0 +1,46 @@
+# --- the sibling-repo references ------------------------------------------------------------
+# Today these are local symlinks to absolute paths (~/integer_inference_engine, ~/chain_c,
+# ~/bsv_third_entry); they must NOT be committed. When this becomes a public GitHub repo they will
+# be replaced by git submodules (or a fetch step in INSTALL) at the same paths — see README
+# "Composition & migration".
+/engine
+/chain_c
+/bsv_third_entry
+
+# --- secrets / generated state (always OUTSIDE the repo under $BONSAI_NOTARY_HOME) -----------
+.env
+.env.*
+!.env.example
+*.wif
+*_bsv.json
+*.key.json
+master_mnemonic*
+# HD keyfiles are written as <address>.json (NOT *.key.json), so ignore the whole keys dir at any
+# depth — defense-in-depth if $BONSAI_NOTARY_HOME ever points inside the tree.
+keys/
+change_floor.txt
+change_index.txt
+wallet/.secrets/
+.venv_wallet/
+
+# --- model weights (fetched separately; ~2.6 GB; provenance tracked in the identity record) --
+*.gguf
+*.safetensors
+artifacts/model/
+
+# --- python ----------------------------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+.venv_*/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# --- editor / os -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+*.log
+*.pid

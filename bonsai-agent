@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# bonsai-agent — resumable AgentTea identity lifecycle, driven through chain_c/build/agentd.
+# Thin wrapper over bsv_third_entry.agent_cli (deploy / action / revoke / recover / status). DRY-RUN unless --confirm.
+#   recover: M-of-3 social recovery — rotate the agent key to --new-agent-key-file (or NEW_AGENT_KEY_FILE).
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BONSAI_NOTARY_HOME="${BONSAI_NOTARY_HOME:-$HOME/.local/trinote}"
+export BONSAI_CHAIN_C_DIR="${BONSAI_CHAIN_C_DIR:-$ROOT/chain_c}"
+BSV_TE_DIR="${BONSAI_BSV_TE_DIR:-$ROOT/bsv_third_entry}"
+PY="${BONSAI_ENGINE_DIR:-$ROOT/engine}/bonsai/.venv/bin/python"; [ -x "$PY" ] || PY="python3"
+export PYTHONPATH="$BSV_TE_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+WPY="$ROOT/.venv/bin/python"; [ -x "$WPY" ] || WPY="$PY"
+NW="$ROOT/wallet/notary_wallet.py"
+
+# recover: rotate the agent key to a fresh keyfile. Accept the rotated-to keyfile as the
+# --new-agent-key-file flag (forwarded verbatim via "$@") OR as a NEW_AGENT_KEY_FILE env var; the
+# orchestration requires it and derives the new agent pubkey. Forward the PATH only — never its WIF.
+if [ "${1:-}" = "recover" ] && [ -n "${NEW_AGENT_KEY_FILE:-}" ] && [[ " $* " != *" --new-agent-key-file "* ]]; then
+    set -- "$@" --new-agent-key-file "$NEW_AGENT_KEY_FILE"
+fi
+
+# Funding: draw the fee from the wallet's OWN derived UTXOs (no hand-picked FUND_* keyfile). Real
+# broadcasts only; a caller-set FUND_*_KEY_FILE always wins. Subcommand picks which env chain_c reads.
+if [ -f "$NW" ] && [[ " $* " == *" --confirm "* ]]; then
+    case "${1:-}" in
+        deploy)  _fenv=FUND_DEPLOY_KEY_FILE ;;
+        action)  _fenv=FUND_ACTION_KEY_FILE ;;
+        revoke)  _fenv=FUND_REVOKE_KEY_FILE ;;
+        recover) _fenv=FUND_RECOVER_KEY_FILE ;;
+        *)       _fenv="" ;;
+    esac
+    if [ -n "$_fenv" ] && [ -z "${!_fenv:-}" ]; then
+        _fk="$("$WPY" "$NW" fund-key --need 12000 --allow-unconfirmed 2>/dev/null || true)"
+        if [ -n "$_fk" ]; then export "$_fenv=$_fk"; echo "[funding] $_fenv → wallet UTXO $_fk" >&2; fi
+    fi
+fi
+
+# Blockchain hygiene: send change to a FRESH derived address (m/44'/236'/0'/1/i, re-derivable WIF)
+# instead of reusing the Elder. Only for real broadcasts (--confirm); a caller-set CHANGE_ADDRESS wins.
+if [ -f "$NW" ] && [ -z "${CHANGE_ADDRESS:-}" ] && [[ " $* " == *" --confirm "* ]]; then
+    _fresh="$("$WPY" "$NW" next-change 2>/dev/null || true)"
+    if [ -n "$_fresh" ]; then export CHANGE_ADDRESS="$_fresh"; echo "[hygiene] change → fresh $_fresh" >&2; fi
+fi
+
+cd "$ROOT"
+exec "$PY" -m bsv_third_entry.agent_cli "$@"
