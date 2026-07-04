@@ -32,6 +32,22 @@ three independently-versioned projects that it wires together at run time.
 | **On-chain orchestration** | `~/bsv_third_entry` | the Python layer that drives chain_c to publish the Third Entry / run the agent lifecycle | `bsv_third_entry/` (symlink) |
 | **Notary glue** | *this repo* | wallet, launchers, docs, model identity | — |
 
+## Get it
+
+```bash
+git clone https://github.com/itsmygithubacct/bonsai-notary.git
+cd bonsai-notary
+./scripts/bootstrap-deps.sh        # clone the 3 sibling repos next to this one + wire the symlinks
+```
+
+`bootstrap-deps.sh` clones [`integer_inference_engine`](https://github.com/itsmygithubacct/integer_inference_engine),
+[`chain_c`](https://github.com/itsmygithubacct/chain_c), and
+[`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry) into the parent directory and
+links them in as `engine/`, `chain_c/`, `bsv_third_entry/`. It is idempotent — re-run any time, and
+`BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh` fast-forwards the checkouts. Already have them?
+Point `BONSAI_ENGINE_DIR` / `BONSAI_CHAIN_C_DIR` / `BONSAI_BSV_TE_DIR` at your own checkouts instead.
+Then follow **`INSTALL.md`** (build chain_c, create the engine venv + native kernel, fetch weights).
+
 ## What changed from `bonsai-notarized-bitnet`
 
 This is an extraction/recomposition of `bonsai-notarized-bitnet`, with two substitutions:
@@ -106,13 +122,14 @@ On-chain broadcasts are **DRY-RUN by default**. A real spend needs **both** `--c
 | `BONSAI_GPU` | `1` use GPU producer, `0` force CPU | `1` |
 | `BONSAI_DRYRUN` | print the resolved command, don't run | `0` |
 
-## Composition & migration (symlinks → GitHub)
+## Composition (how the three siblings are wired)
 
-Today `engine`, `chain_c`, and `bsv_third_entry` are **local symlinks** to sibling checkouts (and are
-`.gitignore`d, since they point at absolute home paths). The design is forward-compatible: when this
-becomes a public GitHub repo, replace each symlink with a **git submodule** (or an `INSTALL` fetch
-step) at the *same path* — every launcher resolves through `./engine`, `./chain_c`, `./bsv_third_entry`
-(each env-overridable), so nothing else changes.
+`engine`, `chain_c`, and `bsv_third_entry` are **symlinks** to sibling checkouts of the three
+dependency repos — they're `.gitignore`d and never committed. `./scripts/bootstrap-deps.sh` creates
+them for you by cloning the siblings from GitHub. Every launcher resolves through `./engine`,
+`./chain_c`, `./bsv_third_entry`, and each is env-overridable (`BONSAI_ENGINE_DIR`,
+`BONSAI_CHAIN_C_DIR`, `BONSAI_BSV_TE_DIR`) — so you can instead point at your own checkouts, or add
+them as **git submodules** at the same paths, with nothing else to change.
 
 ## Docs
 

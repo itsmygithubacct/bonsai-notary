@@ -22,10 +22,18 @@ generated state and weights live under `$BONSAI_NOTARY_HOME` (default `~/.local/
 
 ## 1. The three sibling checkouts
 
-`bonsai-notary` references them at `./engine`, `./chain_c`, `./bsv_third_entry`. Today these are
-symlinks to local checkouts; for a fresh clone, either symlink your checkouts or (future) add them as
-git submodules at those paths. Each path is env-overridable
-(`BONSAI_ENGINE_DIR`, `BONSAI_CHAIN_C_DIR`, `BONSAI_BSV_TE_DIR`).
+`bonsai-notary` references them at `./engine`, `./chain_c`, `./bsv_third_entry`. The easiest way to
+get them is the bootstrap script — it clones all three from GitHub and wires the symlinks:
+
+```bash
+./scripts/bootstrap-deps.sh                        # clone siblings + link engine/ chain_c/ bsv_third_entry/
+BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh   # (later) fast-forward the sibling checkouts
+```
+
+Prefer your own checkouts? Point the env vars (`BONSAI_ENGINE_DIR`, `BONSAI_CHAIN_C_DIR`,
+`BONSAI_BSV_TE_DIR`) at them, symlink them by hand, or add them as git submodules at those paths —
+the launchers resolve through `./engine`, `./chain_c`, `./bsv_third_entry` either way. Confirm they
+resolve:
 
 ```bash
 ls -l engine chain_c bsv_third_entry        # must resolve:
