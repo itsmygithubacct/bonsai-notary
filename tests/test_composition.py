@@ -10,6 +10,8 @@ Run with the engine venv:
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,3 +67,58 @@ def test_engine_onchain_seam_present():
         pytest.skip(f"engine not importable here: {exc}")
     assert hasattr(rbc, "WalletThirdEntryBackend"), \
         "engine no longer exposes the WalletThirdEntryBackend seam — update bsv_third_entry.engine_run"
+
+
+def _dryrun(*args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update(BONSAI_DRYRUN="1", BONSAI_GPU="0")
+    return subprocess.run(
+        [str(ROOT / "bonsai-notary"), *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_27b_receipt_profile_wires_qwen35_artifact_and_fresh_oracle():
+    result = _dryrun(
+        "how many r's are in strawberry?", "--model", "27b", "--receipts", "-n", "384"
+    )
+    assert result.returncode == 0, result.stderr
+    command = result.stdout
+    assert "Bonsai-27B-Q1_0.gguf" in command
+    assert "Bonsai-27B-Q1_0-int-qwen35.safetensors" in command
+    assert "atlas-notarized-bonsai-27b.identity.json" in command
+    assert "--verify-mode fresh-oracle" in command
+    assert "--sampler bonsai27-rec" in command
+    assert "--no-repeat-ngram 4" in command
+    assert "--max-new 1024" in command
+    assert "--receipt" in command
+    assert "-n 384" in command
+
+
+def test_27b_nonreceipt_profile_does_not_load_fresh_oracle():
+    result = _dryrun("hello", "--model=27b")
+    assert result.returncode == 0, result.stderr
+    assert "Bonsai-27B-Q1_0-int-qwen35.safetensors" in result.stdout
+    assert "--verify-mode fresh-oracle" not in result.stdout
+    assert "--max-new 1024" in result.stdout
+
+
+def test_27b_repl_selects_contextual_chat_front_door():
+    result = _dryrun(
+        "repl", "--model", "27b", "--no-receipt", "--context-size", "4096"
+    )
+    assert result.returncode == 0, result.stderr
+    command = result.stdout
+    assert "--repl" in command
+    assert "--chat" in command
+    assert "--context-size 4096" in command
+
+
+def test_unknown_model_fails_before_inference():
+    result = _dryrun("hello", "--model", "99b")
+    assert result.returncode == 2
+    assert "unknown model" in result.stderr

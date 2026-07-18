@@ -152,12 +152,9 @@ for running inference under a stateful identity.
 | Fan-out | [`25f2a0fd…`](https://whatsonchain.com/tx/25f2a0fddec19049ca80cc41dbdb55c1c4eb6e311b9135c891070140da7b9a83) | a <1 BSV key fanned into 8 × 50,000-sat UTXOs at bonsai's own derived addresses (idx 20-27) |
 | **Third entry** | [`2096e14b…`](https://whatsonchain.com/tx/2096e14b7cbbb623557e0db60cbe594e36cd5c22d33809c7d00a1c1d9df21ebb) | `OP_FALSE OP_RETURN open_lm/r1 ‖ 3dd65635…(modelHash) ‖ 0d3236…(receiptHash)` — a Bonsai-8B inference receipt, notarized publicly |
 
-> ⚠️ **Pre-rename anchor (historical).** This tx was broadcast *before* the `open_lm → trinote`
-> clean break, so its immutable OP_RETURN carries the old `open_lm/r1` tag and the old artifact's
-> `modelHash 3dd65635…`. It is **not** re-verifiable against the current `trinote` artifact, whose
-> `modelHash` is `e5ae7bd10b103b8139f1c37e1c1d353878d4f55d8451d0b6b39aaac2943658e1` (see
-> [`../../../RENAME.md`](../../../RENAME.md) — the clean break invalidated all pre-rename anchors).
-> A fresh post-rename third entry carries `trinote/r1 ‖ e5ae7bd1…(modelHash) ‖ <receiptHash>`.
+> ⚠️ **Pre-rename anchor.** This tx predates the `open_lm → trinote` rename, so its immutable OP_RETURN
+> carries the old `open_lm/r1` tag and is not re-verifiable against the current `trinote` artifact. A fresh
+> third entry carries `trinote/r1 ‖ <modelHash> ‖ <receiptHash>` (see [`RENAME.md`](../../../RENAME.md)).
 
 The committed `receiptHash 0d3236…` *was* a genuine Bonsai-8B inference re-executable from the
 pre-rename artifacts. Re-running today via `./bonsai-notary --receipts` produces a fresh receipt

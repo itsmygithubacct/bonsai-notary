@@ -12,6 +12,7 @@
 #   receipted       deterministic + local notarized receipt (byte-exact re-execution + verify) [alias: rcpt]
 #   onchain         receipted + chain_c Third Entry — DRY-RUN by default (no spend/broadcast)
 #   original        raw flagship GGUF via prismml.cpp (float, non-deterministic, NO receipt)    [alias: orig]
+#   bonsai27        Bonsai-27B Q1 GGUF via PrismML llama.cpp (Linux CUDA; inference-only, NO receipt) [alias: 27b]
 #
 # Onchain: builds the Third Entry via chain_c/build/bonsai_third_entry but does NOT broadcast
 #          unless you append --chain-confirm (it spends real BSV). See SECURITY.md.
@@ -20,7 +21,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCH="$ROOT/bonsai-notary"
 
-usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
 [ $# -ge 1 ] || usage 1
 mode="$1"; shift
 
@@ -36,6 +37,7 @@ case "$mode" in
         esac
         exec "$LAUNCH" --receipts --onchain "$@" ;;
     original|orig)     exec "$LAUNCH" --engine prismml.cpp --no-receipt "$@" ;;
+    bonsai27|27b)      exec "${BONSAI_ENGINE_DIR:-$ROOT/engine}/bonsai-27b-cli" "$@" ;;
     -h|--help|help)    usage 0 ;;
-    *) echo "bonsai.sh: unknown mode '$mode' (try: json repl deterministic receipted onchain original)" >&2; exit 2 ;;
+    *) echo "bonsai.sh: unknown mode '$mode' (try: json repl deterministic receipted onchain original bonsai27)" >&2; exit 2 ;;
 esac

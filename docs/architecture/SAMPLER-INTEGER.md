@@ -15,11 +15,10 @@
 
 ## 1. The problem
 
-Greedy used to be the *only* receipt-bound sampler, because re-executability requires a forward pass that
-re-derives the **same token** on any machine (via the portable pure-NumPy oracle — no `.so`/`fcntl`
-needed; see [DETERMINISM.md](DETERMINISM.md) "Platform scope"). Greedy clears that bar trivially (integer
-`argmax` over committed fixed-point logits — no RNG, no float). The old exploration path did not, for three reasons
-(all in `infer_int/sampler.py`):
+Receipt-bound sampling requires a forward pass that re-derives the **same token** on any machine (via the
+portable pure-NumPy oracle — no `.so`/`fcntl` needed; see [DETERMINISM.md](DETERMINISM.md) "Platform
+scope"). Greedy clears that bar trivially (integer `argmax` over committed fixed-point logits — no RNG, no
+float). A naive exploration path does not, for three reasons (all in `infer_int/sampler.py`):
 
 1. **temperature** was a float divide, `rint(logits / T)`;
 2. the **draw** was `int(rng.random() * total)` — a float multiply over numpy's Philox *double* stream;
@@ -93,11 +92,10 @@ integer draw re-selects each token. Greedy is just the special case where the "d
   schema is unchanged, and `receipt_bound` is still `True` for greedy. No `trinote.receipt/v1` schema bump.
 - **No receipt-schema change.** The inverse-temperature is *committed via* the receipt's `temperature`
   field + a pinned `round()` conversion shared by producer and verifier; nothing new is stored.
-- **Fixed:** the runner's `_emit_and_verify` (parent repo, not bundled) previously hard-coded
-  `sampler={"mode":"greedy"}`, so a greedy turn run *with a repetition penalty* (or any sampled turn)
-  would have recorded the wrong sampler and failed to re-derive. It now records the real `cfg` and binds
-  `model_digest` to `modelHash`. The shipped runner is `cli/trinote-run-bonsai`
-  (`src/trinote/cli/run_bonsai_cli.py`).
+- **Sampler binding:** the runner's `_emit_and_verify` records the real `cfg` (not a hard-coded
+  `sampler={"mode":"greedy"}`) and binds `model_digest` to `modelHash`, so a greedy turn run *with a
+  repetition penalty* — or any sampled turn — records the sampler it actually used and re-derives
+  correctly. The shipped runner is `cli/trinote-run-bonsai` (`src/trinote/cli/run_bonsai_cli.py`).
 
 ## 5. What is float-free (and what is not)
 
