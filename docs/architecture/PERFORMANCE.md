@@ -1,6 +1,6 @@
 # PERFORMANCE.md — making deterministic Bonsai inference fast without breaking bit-exactness
 
-bonsai-notarized-bitnet runs **bit-exact integer inference** so a receipt can be re-executed and verified
+This engine runs **bit-exact integer inference** so a receipt can be re-executed and verified
 through the portable pure-NumPy oracle on any machine — no `.so`, no `fcntl` needed (the optional native
 kernel + local-ledger lock are POSIX + x86_64/aarch64; see [DETERMINISM.md](DETERMINISM.md) "Platform scope",
 [../receipts/THIRD-ENTRY.md](../receipts/THIRD-ENTRY.md)). That

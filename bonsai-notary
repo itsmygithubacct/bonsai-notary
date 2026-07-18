@@ -12,7 +12,7 @@
 # $BONSAI_NOTARY_HOME (default ~/.local/trinote) — the SAME home the engine and chain_c both use.
 #
 # Usage:
-#   bonsai-notary [MODE] [PROMPT] [--receipts] [--onchain] [--verbose] [extra run_bonsai_cli flags...]
+#   bonsai-notary [MODE] [PROMPT] [--model 8b|27b] [--receipts] [--onchain] [--verbose] [extra run_bonsai_cli flags...]
 #
 # MODE (default: one-shot):
 #   repl            interactive REPL              — omit PROMPT
@@ -20,6 +20,7 @@
 #   (none) PROMPT   one-shot completion
 #
 # Flags:
+#   --model MODEL   notarized model profile: 8b (default) or 27b
 #   --receipts      emit a notarized, byte-exact, third-party-verifiable receipt (OFF by default)
 #   --onchain       anchor the receipt's Third Entry via chain_c (DRY-RUN unless --chain-confirm)
 #   --verbose       show engine/timing/receipt diagnostics (json/one-shot are output-only by default)
@@ -29,6 +30,8 @@
 #   BONSAI_ENGINE_DIR    inference-engine checkout (default ./engine)
 #   BONSAI_CHAIN_C_DIR   chain_c checkout         (default ./chain_c)
 #   BONSAI_WEIGHTS_REPO  where to find the model weights (default ~/bonsai-notarized-bitnet)
+#   BONSAI_MODEL         default model profile: 8b or 27b (default: 8b)
+#   BONSAI_CONTEXT_SIZE  context tokens for either model/backend (default: model/artifact-aware auto)
 #   BONSAI_GPU=0         force CPU (default uses the GPU producer, auto-falls back to CPU)
 #   BONSAI_DRYRUN=1      print the resolved command instead of running it
 set -euo pipefail
@@ -59,16 +62,27 @@ case "$1" in -h|--help|help) usage 0 ;; esac
 mode="oneshot"
 case "$1" in repl|json) mode="$1"; shift ;; esac
 
-# --receipts / --verbose are notary-level switches; everything else passes through to run_bonsai_cli.
-receipt="--no-receipt"; verbose=0; pre=()
-for a in "$@"; do
-    case "$a" in
-        --receipts|--receipt) receipt="--receipt" ;;
-        --no-receipt)         receipt="--no-receipt" ;;
-        --verbose|-v)         verbose=1 ;;
-        *)                    pre+=("$a") ;;
+# --model / --receipts / --verbose are notary-level switches; everything else
+# passes through to run_bonsai_cli. Parse --model's value here so it cannot be
+# mistaken for the one-shot prompt by the generic pass-through parser below.
+model="${BONSAI_MODEL:-8b}"; receipt="--no-receipt"; verbose=0; pre=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --model)
+            [ $# -ge 2 ] || { echo "bonsai-notary: --model needs 8b or 27b" >&2; exit 2; }
+            model="$2"; shift 2 ;;
+        --model=*)            model="${1#--model=}"; shift ;;
+        --receipts|--receipt) receipt="--receipt"; shift ;;
+        --no-receipt)         receipt="--no-receipt"; shift ;;
+        --verbose|-v)         verbose=1; shift ;;
+        *)                    pre+=("$1"); shift ;;
     esac
 done
+case "$model" in
+    8b|bonsai8|bonsai-8b)     model="8b" ;;
+    27b|bonsai27|bonsai-27b)  model="27b" ;;
+    *) echo "bonsai-notary: unknown model '$model' (expected 8b or 27b)" >&2; exit 2 ;;
+esac
 set -- "${pre[@]+"${pre[@]}"}"
 
 # First bare token is the PROMPT for json/one-shot; REPL takes none.
@@ -84,13 +98,36 @@ fi
 
 # --- resolve model weights from the state home (populated by scripts/fetch_weights.sh) ---
 MODELS_DIR="${BONSAI_MODELS_DIR:-$BONSAI_NOTARY_HOME/models}"
-GGUF="$MODELS_DIR/Bonsai-8B-Q1_0.gguf"
-ARTIFACT="$MODELS_DIR/atlas-notarized-bonsai-8b.safetensors"
-IDENTITY="$ROOT/artifacts/atlas-notarized-bonsai-8b.identity.json"
+model_args=()
+case "$model" in
+    8b)
+        GGUF="$MODELS_DIR/Bonsai-8B-Q1_0.gguf"
+        ARTIFACT="$MODELS_DIR/atlas-notarized-bonsai-8b.safetensors"
+        IDENTITY="$ROOT/artifacts/atlas-notarized-bonsai-8b.identity.json"
+        ;;
+    27b)
+        GGUF="$MODELS_DIR/Bonsai-27B-Q1_0.gguf"
+        ARTIFACT="$MODELS_DIR/Bonsai-27B-Q1_0-int-qwen35.safetensors"
+        IDENTITY="$ENGINE_DIR/bonsai/artifacts/atlas-notarized-bonsai-27b.identity.json"
+        # Seeded integer top-p is deterministic because its full sampler state
+        # is receipt-committed. Keep EOS unpenalized and arrest exact loops with
+        # the n-gram guard. Explicit caller flags are appended later and win.
+        model_args=(--chat --sampler bonsai27-rec --rep-penalty 1.0 --no-repeat-ngram 4 --max-new 1024)
+        if [ "$receipt" = "--receipt" ]; then
+            # A 27B receipt must be checked by a separately loaded canonical
+            # CPU oracle. Never let an optimized producer verify itself.
+            model_args+=(--fast-required --verify-mode fresh-oracle)
+        fi
+        ;;
+esac
 
 if [ ! -e "$GGUF" ] && [ ! -e "$ARTIFACT" ]; then
-    echo "bonsai-notary: no weights in $MODELS_DIR — run: ./scripts/fetch_weights.sh" >&2
-    echo "  (set HF_REPO for a real download, or BONSAI_WEIGHTS_REPO to reuse a local checkout)" >&2
+    if [ "$model" = "27b" ]; then
+        echo "bonsai-notary: no 27B weights in $MODELS_DIR — run the engine's Bonsai-27B install/fetch scripts" >&2
+    else
+        echo "bonsai-notary: no weights in $MODELS_DIR — run: ./scripts/fetch_weights.sh" >&2
+        echo "  (set HF_REPO for a real download, or BONSAI_WEIGHTS_REPO to reuse a local checkout)" >&2
+    fi
 fi
 
 weight_args=()
@@ -101,12 +138,13 @@ weight_args=()
 gpu_args=(); [ "$GPU" = "1" ] && gpu_args=(--gpu)
 
 case "$mode" in
-    repl)    base=(--fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
+    repl)    base=(--repl --chat --fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
     json)    base=(--json --fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
     oneshot) base=(--fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
 esac
 
-cmd=("$PY" -m bsv_third_entry.engine_run "${base[@]}" "${weight_args[@]+"${weight_args[@]}"}" "${prompt_args[@]+"${prompt_args[@]}"}" "$@")
+cmd=("$PY" -m bsv_third_entry.engine_run "${base[@]}" "${weight_args[@]+"${weight_args[@]}"}"
+     "${model_args[@]+"${model_args[@]}"}" "${prompt_args[@]+"${prompt_args[@]}"}" "$@")
 
 # json / one-shot emit only model output unless --verbose; diagnostics go to stderr.
 quiet_stderr=0

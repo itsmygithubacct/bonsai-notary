@@ -436,4 +436,4 @@ This is a large improvement over the observed demo baseline of about `100s/token
 RAM-heavy sign cache. It is still a CPU reference verifier, not a fast serving engine. The latest profile
 shows prepared-LUT reuse is only a small win and grouped calls do not move the floor. Further speed now needs
 deeper Q1 apply work: a specialized `tokens == 1` decode kernel, SIMD over packed bits, or a different
-block-sum strategy. Output argmax is no longer a material bottleneck for greedy decode.
+block-sum strategy. Output argmax is not a material bottleneck for greedy decode.

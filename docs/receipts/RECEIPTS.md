@@ -73,8 +73,7 @@ to the network.
 ## The on-chain leg — `chain_c`, driven by `bsv_third_entry`
 
 The BSV broadcaster is the byte-exact C port [`chain_c`](../../chain_c) (the C reimplementation of the
-`priscilla_bsv` chain layer this project supersedes — it replaced the pre-composition vendored
-TypeScript `chain/` toolchain). The Python orchestration [`bsv_third_entry`](../../bsv_third_entry)
+`priscilla_bsv` chain layer). The Python orchestration [`bsv_third_entry`](../../bsv_third_entry)
 drives its CLIs locally — no remote host:
 
 - `chain_c`'s `bonsai_third_entry` CLI — resolves the receipt's `ACTION_HASH` (its `receiptHash`) and

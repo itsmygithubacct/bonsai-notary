@@ -48,17 +48,12 @@ links them in as `engine/`, `chain_c/`, `bsv_third_entry/`. It is idempotent —
 Point `BONSAI_ENGINE_DIR` / `BONSAI_CHAIN_C_DIR` / `BONSAI_BSV_TE_DIR` at your own checkouts instead.
 Then follow **`INSTALL.md`** (build chain_c, create the engine venv + native kernel, fetch weights).
 
-## What changed from `bonsai-notarized-bitnet`
+## How `--onchain` is wired
 
-This is an extraction/recomposition of `bonsai-notarized-bitnet`, with two substitutions:
-
-* **inference** is the standalone `~/integer_inference_engine` (not the in-repo `src/trinote`), and
-* **on-chain** is `~/chain_c` driven by `~/bsv_third_entry` (not the vendored TypeScript `chain/`).
-
-The engine's `--onchain` publish step normally constructs an `trinote` `WalletThirdEntryBackend`
-(Python BSV wallet) or shells the TS `chain/`. Here, `bsv_third_entry.engine_run` rebinds that one
-name to `ChainCThirdEntryBackend`, so `--onchain` publishes through `chain_c/build/bonsai_third_entry`
-— **with no change to the engine source**.
+The engine's `--onchain` publish step constructs a `trinote` `WalletThirdEntryBackend` (Python BSV
+wallet) by default. Here, `bsv_third_entry.engine_run` rebinds that one name to
+`ChainCThirdEntryBackend`, so `--onchain` publishes through `chain_c/build/bonsai_third_entry` —
+**with no change to the engine source**.
 
 ## Run
 
@@ -87,11 +82,35 @@ into `$BONSAI_NOTARY_HOME/models`, or reuses a verified local checkout via `BONS
 ./scripts/bonsai.sh onchain   "Notarize this."                          # dry-run unless --chain-confirm
 ./scripts/bonsai.sh repl
 
+# optional Linux/CUDA Bonsai-27B GGUF inference (fast floating-point path; no receipt)
+engine/bonsai/scripts/install_bonsai_27b_gguf.sh
+engine/bonsai/scripts/fetch_bonsai_27b_gguf.sh
+./scripts/bonsai.sh bonsai27 "Explain Merkle proofs." -n 256
+
+# deterministic Bonsai-27B through the same code/notary/AgentTea path as 8B
+./bonsai-notary "Explain Merkle proofs." --model 27b --receipts -n 384
+./bonsai-notary "Notarize this." --model 27b --receipts --onchain                  # dry-run
+./bonsai-notary "Notarize this." --model 27b --receipts --onchain --chain-confirm # real BSV
+
 # resumable on-chain agent identity (driven through chain_c/build/agentd)
 ./bonsai-agent status
 ./bonsai-agent deploy --ricardian-hash <64hex>                          # DRY-RUN unless --confirm
 ./bonsai-agent action --action-hash <receiptHash> --provenance-hash <modelHash>
 ```
+
+The native 8B and 27B profiles share a contextual REPL: prior turns are retained, exact native prefix state is
+reused, and only whole oldest turns are evicted when the token budget fills. Line editing handles arrow keys;
+mouse/type-ahead bytes are hidden and flushed while inference or receipt replay is running. `/help` lists session
+commands (`/context`, `/system`, `/think`, `/retry`, `/history`, `/paste`, `/clear`, `/bundle`, `/verify`). Ctrl-C
+cancels the active generation without committing its partial response. Defaults are model-aware—8B prefers 16,384
+tokens when host memory permits, while the current deterministic 27B artifact caps at 4,096. Override with
+`--context-size N`, `BONSAI_CONTEXT_SIZE=N`, or the engine's `bonsai.toml`; use `/context` to inspect the live budget.
+
+The 27B receipt profile fails closed unless its artifact-bound Qwen3.5 identity and a separately loaded
+fresh CPU oracle are available; the optimized producer is never allowed to verify itself. Seeded integer
+sampling remains byte-exact and receipt-verifiable. Use `--no-think` for the vendor's non-thinking chat prefix,
+or leave thinking enabled for better answer quality. The profile defaults to a 1,024-token generation budget;
+an explicit `-n N` / `--max-new N` is appended later and wins.
 
 ## State & secrets — outside the repo
 
@@ -118,6 +137,8 @@ On-chain broadcasts are **DRY-RUN by default**. A real spend needs **both** `--c
 | `BONSAI_CHAIN_C_DIR` | chain_c checkout | `./chain_c` |
 | `BONSAI_BSV_TE_DIR` | bsv_third_entry checkout | `./bsv_third_entry` |
 | `BONSAI_MODELS_DIR` | weights location (in the state home) | `$BONSAI_NOTARY_HOME/models` |
+| `BONSAI_MODEL` | default notary model profile (`8b` or `27b`) | `8b` |
+| `BONSAI_CONTEXT_SIZE` | context tokens for either native profile (`auto` also accepted) | model/artifact-aware auto |
 | `BONSAI_WEIGHTS_REPO` | local checkout `scripts/fetch_weights.sh` reuses weights from | `~/bonsai-notarized-bitnet` |
 | `BONSAI_GPU` | `1` use GPU producer, `0` force CPU | `1` |
 | `BONSAI_DRYRUN` | print the resolved command, don't run | `0` |
