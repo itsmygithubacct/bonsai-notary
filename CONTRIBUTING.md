@@ -7,9 +7,9 @@ this repo only wires them together. Knowing *where* a change belongs is the firs
 
 | If you're changing… | It belongs in… |
 |---|---|
-| the integer inference engine, kernels, receipts, GGUF import, sampler | **`engine/`** (`~/integer_inference_engine`) |
-| BSV tx building, contracts, Rabin/sighash, the C CLIs | **`chain_c/`** (`~/chain_c`) |
-| the on-chain orchestration (Third Entry backend, agent lifecycle, the engine `--onchain` bridge) | **`bsv_third_entry/`** (`~/bsv_third_entry`) |
+| the integer inference engine, kernels, receipts, GGUF import, sampler | **`engine/`** ([repository](https://github.com/itsmygithubacct/integer_inference_engine)) |
+| BSV tx building, contracts, Rabin/sighash, the C CLIs | **`chain_c/`** ([repository](https://github.com/itsmygithubacct/chain_c)) |
+| the on-chain orchestration (Third Entry backend, agent lifecycle, the engine `--onchain` bridge) | **`bsv_third_entry/`** ([repository](https://github.com/itsmygithubacct/bsv_third_entry)) |
 | launchers, the wallet, model identity, composed docs, weight-fetch | **here** (`bonsai-notary`) |
 
 Do **not** edit code under the `engine/`, `chain_c/`, or `bsv_third_entry/` symlinks from this repo —

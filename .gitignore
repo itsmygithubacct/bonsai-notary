@@ -1,6 +1,5 @@
 # --- the sibling-repo references ------------------------------------------------------------
-# Today these are local symlinks to absolute paths (~/integer_inference_engine, ~/chain_c,
-# ~/bsv_third_entry); they must NOT be committed. When this becomes a public GitHub repo they will
+# Today these are local dependency symlinks; they must NOT be committed. A pinned public composition can
 # be replaced by git submodules (or a fetch step in INSTALL) at the same paths — see README
 # "Composition & migration".
 /engine

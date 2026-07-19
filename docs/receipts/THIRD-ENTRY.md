@@ -34,6 +34,11 @@ entries are:
 `receipts/signing_ec.py`; the legacy `local-hmac@v1` is a symmetric demo vouch. See
 [`RECEIPTS.md`](RECEIPTS.md).)
 
+Two identities meet in a stateful publication but should not be confused. The **model identity** binds the
+artifact, inference contract, source-weight digest, and quality gate. The **Ricardian contract** binds
+human-readable agent policy to the exact deployment parameters of an on-chain identity. An action joins
+them by setting `actionHash` to the inference `receiptHash` and `provenanceHash` to its `modelHash`.
+
 ---
 
 ## 2. What the third entry commits
@@ -54,6 +59,11 @@ OP_FALSE OP_RETURN <tag> <modelHash> <receiptHash>          ── on the wire: 
 `receipts/emit.py::chain_artifact(receipt)` builds the artifact `{schema, tag, modelHash, receiptHash,
 samplerMode, seed}`; the wallet turns `(tag, modelHash, receiptHash)` into the `OP_RETURN` script
 (`OpReturn().lock([...])`, matching `006a…` — see [`RECEIPTS.md`](RECEIPTS.md) §"on-chain shape").
+
+The wire format is model-agnostic. Bonsai-8B and the deterministic Bonsai-27B Qwen3.5 path publish the
+same pair of commitments with different `modelHash` values. The regular `bonsai27` GGUF runner cannot
+publish one because its floating-point execution cannot issue a receipt. See
+[`../BONSAI-27B.md`](../BONSAI-27B.md).
 
 ---
 
@@ -94,7 +104,8 @@ Emissions come from **this project's own self-managed BSV HD wallet** (`wallet/n
 
 ### Wired into the notary emit path
 In the composition the default `--onchain` Third Entry is produced by the byte-exact C port
-[`chain_c`](../../chain_c), driven by the [`bsv_third_entry`](../../bsv_third_entry) orchestration
+[`chain_c`](https://github.com/itsmygithubacct/chain_c), driven by the
+[`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry) orchestration
 (`ChainCThirdEntryBackend`) and surfaced as `./bonsai-notary … --onchain` / `./bonsai-agent` (see
 [`RECEIPTS.md`](RECEIPTS.md)). The standalone `OP_RETURN` can also be landed by this project's own BSV
 wallet: `receipts/broadcast.py::WalletThirdEntryBackend` plugs that wallet into `emit_receipt` as a chain
@@ -154,7 +165,7 @@ for running inference under a stateful identity.
 
 > ⚠️ **Pre-rename anchor.** This tx predates the `open_lm → trinote` rename, so its immutable OP_RETURN
 > carries the old `open_lm/r1` tag and is not re-verifiable against the current `trinote` artifact. A fresh
-> third entry carries `trinote/r1 ‖ <modelHash> ‖ <receiptHash>` (see [`RENAME.md`](../../../RENAME.md)).
+> third entry carries `trinote/r1 ‖ <modelHash> ‖ <receiptHash>`.
 
 The committed `receiptHash 0d3236…` *was* a genuine Bonsai-8B inference re-executable from the
 pre-rename artifacts. Re-running today via `./bonsai-notary --receipts` produces a fresh receipt
@@ -193,9 +204,12 @@ by anyone holding the receipt fields.
   publicly*. They do **not** prove the output is *correct*, nor (for the standalone form) that the operator
   recorded *every* inference — that completeness/non-repudiation property is what the stateful identity
   (txCount) adds.
+- **Privacy boundary:** the transaction carries commitments and public identity/transaction data, not the
+  prompt, output text, receipt preimage, model weights, or private keys. Sharing a receipt bundle can disclose
+  its optional plaintext transcript, so inspect it before publication.
 
 ## References
 - Grigg, *Triple Entry Accounting* (2005) — <https://iang.org/papers/triple_entry.html>
 - Grigg, *The Ricardian Contract* (2004) — <https://iang.org/papers/ricardian_contract.html>
 - Sgantzos, Al Hemairy, Tzavaras & Stelios, *Triple-Entry Accounting as a Means of Auditing LLMs* (JRFM 2023) — <https://www.mdpi.com/1911-8074/16/9/383>
-- This repo: [`RECEIPTS.md`](RECEIPTS.md) · [`../architecture/DETERMINISM.md`](../architecture/DETERMINISM.md) · [`chain_c`](../../chain_c) · [`bsv_third_entry`](../../bsv_third_entry) · `wallet/notary_wallet.py` · `receipts/broadcast.py`
+- This repo: [`RECEIPTS.md`](RECEIPTS.md) · [`../architecture/DETERMINISM.md`](../architecture/DETERMINISM.md) · [`chain_c`](https://github.com/itsmygithubacct/chain_c) · [`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry) · `wallet/notary_wallet.py` · `receipts/broadcast.py`

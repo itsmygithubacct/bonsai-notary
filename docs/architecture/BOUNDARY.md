@@ -23,7 +23,7 @@ gpu runs each chain step as a remote invocation and captures the result on stdou
 
 ```bash
 # gpu-initiated; the receipt artifact crosses outbound, the chain_c plan/txid pulled straight back to local
-ssh host 'cd ~/bsv_third_entry && ./bsv-third-entry --artifact /dev/stdin --plan' \
+ssh host 'cd /path/to/bsv_third_entry && ./bsv-third-entry --artifact /dev/stdin --plan' \
     < boundary/inference_receipt.json > .out/third_entry.json
 ```
 

@@ -4,14 +4,18 @@
 identity record, and docs. It does **not** vendor the inference engine or the chain layer — those are
 separate projects referenced by symlink, each with its own attribution:
 
-- **Inference engine** — `engine/` (`~/integer_inference_engine`): see that project's `LICENSE` /
-  `NOTICE`. It is the integer-reference engine extracted from the `ATLAS-Notarized-BitNet` lineage.
-- **On-chain C software** — `chain_c/` (`~/chain_c`): see `chain_c/NOTICE` and `chain_c/SECURITY.md`.
+- **Inference engine** — `engine/`
+  ([repository](https://github.com/itsmygithubacct/integer_inference_engine)): see that project's
+  `LICENSE` / `NOTICE`. It is the integer-reference engine extracted from the
+  `ATLAS-Notarized-BitNet` lineage.
+- **On-chain C software** — `chain_c/` ([repository](https://github.com/itsmygithubacct/chain_c)):
+  see that project's `NOTICE` and `SECURITY.md`.
   chain_c is a byte-exact C port of the **Priscilla BSV** chain layer (TypeScript / scrypt-ts); it
   vendors cJSON (MIT), Unity (MIT), a public-domain RIPEMD160, and the circomlib MiMC7 round constants,
   and links libsecp256k1 / OpenSSL libcrypto / libcurl. The compiled scrypt contract artifacts and the
   Ricardian prose under `chain_c/` originate from that upstream project.
-- **On-chain orchestration** — `bsv_third_entry/` (`~/bsv_third_entry`): pure-Python glue that drives
+- **On-chain orchestration** — `bsv_third_entry/`
+  ([repository](https://github.com/itsmygithubacct/bsv_third_entry)): pure-Python glue that drives
   `chain_c`'s CLIs; see its `LICENSE`.
 
 ## This repository

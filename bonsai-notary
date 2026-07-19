@@ -2,9 +2,9 @@
 # bonsai-notary — the composed deterministic-inference + on-chain-notary launcher.
 #
 # Wires four pieces together at run time:
-#   * inference engine : ./engine          (-> ~/integer_inference_engine ; trinote under bonsai/src)
-#   * on-chain software: ./chain_c         (-> ~/chain_c ; bonsai_third_entry / agentd CLIs)
-#   * on-chain orch.   : ./bsv_third_entry (-> ~/bsv_third_entry ; ChainC backend + agent driver)
+#   * inference engine : ./engine          (trinote under bonsai/src)
+#   * on-chain software: ./chain_c         (bonsai_third_entry / agentd CLIs)
+#   * on-chain orch.   : ./bsv_third_entry (ChainC backend + agent driver)
 #   * notary glue      : this dir          (wallet, launchers, docs, identity)
 #
 # It runs the engine's run_bonsai_cli through bsv_third_entry.engine_run, which rebinds the
@@ -29,7 +29,7 @@
 #   BONSAI_NOTARY_HOME   shared state/secrets home (default ~/.local/trinote)
 #   BONSAI_ENGINE_DIR    inference-engine checkout (default ./engine)
 #   BONSAI_CHAIN_C_DIR   chain_c checkout         (default ./chain_c)
-#   BONSAI_WEIGHTS_REPO  where to find the model weights (default ~/bonsai-notarized-bitnet)
+#   BONSAI_WEIGHTS_REPO  optional local source checkout for 8B weights (default: unset/download)
 #   BONSAI_MODEL         default model profile: 8b or 27b (default: 8b)
 #   BONSAI_CONTEXT_SIZE  context tokens for either model/backend (default: model/artifact-aware auto)
 #   BONSAI_GPU=0         force CPU (default uses the GPU producer, auto-falls back to CPU)
