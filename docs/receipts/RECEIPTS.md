@@ -1,22 +1,12 @@
 # RECEIPTS.md — per-inference TEA receipts: build, record, verify, broadcast (all local)
 
-> **Scope of THIS standalone repo.** What ships and is exercised here is the **local receipt core**:
-> build → sign (`local-hmac@v1`) → record to a hash-linked local ledger → **verify by re-execution** →
-> dry-run "broadcast" to a local log. That is the whole trustless story and needs no network.
->
-> The **on-chain BSV layer described in the lower half of this document is part of the composition** — it
-> is the byte-exact C port [`chain_c`](../../chain_c), driven by the Python orchestration
-> [`bsv_third_entry`](../../bsv_third_entry) (which together replaced the pre-composition vendored
-> TypeScript `chain/` toolchain) — but it is **default-OFF**. The publish step defaults to the
-> network-free `LogBroadcastBackend` (a dry-run local log); a real BSV `OP_RETURN` only fires behind a
-> two-key interlock (`enable_chain=True` / `--onchain` **and** `CONFIRM_MAINNET_BROADCAST=yes`, surfaced
-> at the launchers as `--chain-confirm` / `--confirm`). `bsv_third_entry`'s `ChainCThirdEntryBackend`
-> drives the `chain_c` CLIs (`bonsai_third_entry`, `agentd`) when chain emission is enabled, dry-run
-> unless confirmed; the standalone `OP_RETURN` can also be landed by the project's own BSV wallet
-> (`WalletThirdEntryBackend` → `wallet/notary_wallet.py`). The real entry points are the composed
-> launchers `./bonsai-notary … --receipts --onchain` and `./bonsai-agent`. The default
-> (`LogBroadcastBackend`, dry-run log) is the only publish path that functions with **zero network**, and
-> it is the whole trustless story on its own.
+> **Scope.** The local receipt core—build, secp256k1-sign, append to a hash-linked ledger, and verify by
+> re-execution—works without a network or blockchain. The optional BSV layer is provided by
+> [`chain_c`](https://github.com/itsmygithubacct/chain_c), driven by
+> [`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry). It is default-off and dry-runs
+> unless separately confirmed. `./bonsai-notary … --receipts` is the local path;
+> `./bonsai-notary … --receipts --onchain` and `./bonsai-agent` expose the composed Third Entry path.
+> The standalone wallet backend remains available for deployments that choose it.
 
 ## The triple-entry receipt
 
@@ -26,23 +16,23 @@ entries are produced locally:
 
 | Entry | DESIGN §5.3 | Here |
 |---|---|---|
-| 1st `σ_Model` | Rabin sig, model key | `local-hmac@v1` vouch, model key (`receipts/signing.py`) |
-| 2nd `σ_Counterparty` | Rabin sig, caller key | `local-hmac@v1` vouch, counterparty key |
+| 1st `σ_Model` | model signature | `secp256k1-ecdsa@v1` model signature by default; labeled `local-hmac@v1` only in demo mode |
+| 2nd `σ_Counterparty` | caller signature | `secp256k1-ecdsa@v1` counterparty signature by default; labeled `local-hmac@v1` only in demo mode |
 | 3rd `σ_Ledger` | `OP_RETURN` on BSV | local hash-linked ledger **+** (gated) a real BSV `OP_RETURN` |
 
 `build_receipt` returns a **bundle** `{"receipt": …, "preimage": …}` (DESIGN §5.3 on/off-chain split):
 the `receipt` (`trinote.receipt/v1`) carries commitments + signatures + `receiptHash` and **no raw
-text**; the `preimage` carries the off-chain token ids/sampler/trace a verifier needs. The MI `trace`
-is committed but empty (`miStatus="pending"` — P5).
+text**; the `preimage` carries the off-chain token IDs, sampler, and trace a verifier needs.
 
 ## The trustless core (no key, no chain)
 
 `verify_receipt` (DESIGN §5.4) **recomputes** rather than believes:
 1. recompute `inputCommit`/`outputCommit` from the preimage ids → must equal the receipt
 2. recompute `receiptHash` from the receipt body → must equal the committed value
-3. re-run the **bit-exact greedy** forward on the reference engine (`infer_int/verify.py`) → the output
-   must re-derive token-for-token (greedy is the only receipt-bound sampler)
-4. *(optional)* re-check the two `local-hmac` signatures — needs the shared secret
+3. re-run the bit-exact forward and committed integer sampler on the reference engine
+   (`infer_int/verify.py`) → the output must re-derive token-for-token
+4. verify the default secp256k1 signatures from their committed public keys; legacy HMAC demo receipts
+   instead require the shared secret
 
 Steps 1–3 need no key and no chain. This is what makes the third entry *trustless*.
 
@@ -72,8 +62,9 @@ to the network.
 
 ## The on-chain leg — `chain_c`, driven by `bsv_third_entry`
 
-The BSV broadcaster is the byte-exact C port [`chain_c`](../../chain_c) (the C reimplementation of the
-`priscilla_bsv` chain layer). The Python orchestration [`bsv_third_entry`](../../bsv_third_entry)
+The BSV broadcaster is the byte-exact C port
+[`chain_c`](https://github.com/itsmygithubacct/chain_c) (the C reimplementation of the chain layer). The
+Python orchestration [`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry)
 drives its CLIs locally — no remote host:
 
 - `chain_c`'s `bonsai_third_entry` CLI — resolves the receipt's `ACTION_HASH` (its `receiptHash`) and
@@ -86,7 +77,7 @@ drives its CLIs locally — no remote host:
 **Build the chain layer once** (no keys, no broadcast):
 
 ```bash
-bash chain_c/build_chain_c.sh   # builds the chain_c CLIs under $BONSAI_NOTARY_HOME/chain_c/build
+bash chain_c/build_chain_c.sh   # builds the chain_c CLIs under chain_c/build
 ```
 
 ## Two on-chain shapes for the third entry
@@ -149,10 +140,19 @@ mode dispatcher over it. These replace the pre-composition `cli/trinote-run-bons
 entrypoints.
 
 ```bash
-# the shipped receipt path: byte-exact int-ref@bonsai-qwen3, greedy receipt built + verified by re-execution
+# the shipped receipt path: byte-exact int-ref@bonsai-qwen3, committed sampler + re-execution
 ./bonsai-notary "What is a Merkle tree?" --receipts -n 8
 ./scripts/bonsai.sh receipted "What is a tensor?"     # mode dispatcher over the same path
+
+# Bonsai-27B: distinct Qwen3.5 identity + quality gate + separately loaded fresh CPU oracle
+./bonsai-notary "How many r's are in strawberry?" --model 27b --receipts -n 128
 ```
+
+The regular `./scripts/bonsai.sh bonsai27` launcher is intentionally **not** a receipt path: its
+floating-point PrismML llama.cpp execution is outside the integer determinism contract. In contrast,
+`./bonsai-notary … --model 27b --receipts` loads the imported Qwen3.5 artifact, validates its distinct
+identity and hash-bound quality gate, and re-executes with a fresh native-disabled CPU oracle. The optimized
+CPU/GPU producer cannot verify itself. See [`../BONSAI-27B.md`](../BONSAI-27B.md).
 
 The launcher emits + verifies receipts (build + record + re-execute) and exposes the primitives in the
 engine's `trinote.receipts` library:
@@ -162,8 +162,10 @@ engine's `trinote.receipts` library:
 ./bonsai-notary "What is a Merkle tree?" --receipts -n 8
 ```
 
-<!-- TODO(docs): a portable-bundle pack/verify CLI (the former `trinote-receipt-bundle`) is not wired as a
-     launcher in this composed repo; the bundle primitives live in the engine's `trinote.bundle`. -->
+Receipted runs package a portable local bundle under `$BONSAI_NOTARY_HOME/bundles` by default. In the REPL,
+`/bundle` packages the last receipt and `/verify` replays it. The engine's
+`trinote.cli.receipt_bundle_cli` module provides offline, on-chain, and re-execution verification for
+third-party consumers; see [`RECEIPT-BUNDLE.md`](RECEIPT-BUNDLE.md).
 
 
 ```python
@@ -175,7 +177,8 @@ bundle = build_receipt(model_hash=mh, input_ids=ids, output_ids=out,
 verify_receipt(bundle, model=model, model_digest=mh)                 # recompute + re-execute
 
 # ledger verification is a LIBRARY call (no `trinote-receipt ledger --verify` CLI exists):
-LocalLedger("artifacts/receipts/ledger.jsonl").verify_chain()       # → {"ok": True/False, "brokenAt": …}
+from trinote.notary_paths import ledger_default
+LocalLedger(ledger_default()).verify_chain()       # → {"ok": True/False, "brokenAt": …}
 ```
 
 > **Ledger caveat.** `verify_chain()` checks the hash-links of the local ledger, so it catches an

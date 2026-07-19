@@ -7,6 +7,10 @@ kernel + local-ledger lock are POSIX + x86_64/aarch64; see [DETERMINISM.md](DETE
 constraint shapes every performance decision: an optimization is only admissible if the **committed bits do
 not change** — not on this CPU, and not on the arbitrary CPU that later re-runs the receipt.
 
+This inherited note describes the original Bonsai-8B kernel work. Bonsai-27B uses a different 64-layer
+Qwen3.5 hybrid graph and resident CPU/CUDA executors; do not apply the 8B timings below to it. See
+[`../BONSAI-27B.md`](../BONSAI-27B.md) for the measured 27B resource and throughput table.
+
 ## TL;DR — run it fast
 ```bash
 OMP_NUM_THREADS=8 trinote-run-bonsai --fast --fast-required ...     # or: tools/launch_bonsai_live.sh
@@ -58,7 +62,7 @@ bit-exact*:
   saturation (`hasSaturation = false`, the declared wrap-on-overflow contract in `reference_bonsai.py`), the
   per-128-group scale applied as integer `multiply-then-arithmetic-shift` *before* the cross-block sum, and **no
   float / no FMA** anywhere in the Q1 path. Integer add/mul mod 2⁶⁴ are associative+commutative, so lane-width
-  reassociation (SSE/AVX2/AVX-512/NEON) yields the same residue. This is correct *today* but contingent.
+  reassociation (SSE/AVX2/AVX-512/Arm Advanced SIMD) yields the same residue. This is correct *today* but contingent.
 
 So A is robust; B is correct-but-fragile. On the property the project rests on — portable committed bits — A
 wins, and "both" is the existing reality, not a new build.
@@ -85,7 +89,7 @@ counts and at the int64 overflow boundary). Keep them green; they need `ecdsa` i
 ## Future work: a gated re-vectorization
 A genuinely *new* aggressive vectorization (e.g. saturating VNNI int8) is viable as a second step ONLY under:
 (1) a declared determinism scope (oracle stays canonical); (2) a proof of an exact, non-narrowing accumulator
-with pinned reduction; and (3) a **per-ISA parity CI matrix** (x86-64-v2/v3 + ARM-NEON, gcc + clang) that
+with pinned reduction; and (3) a **per-ISA parity CI matrix** (x86-64-v2/v3 + Arm Advanced SIMD, gcc + clang) that
 *proves* modular invariance per target rather than asserting it. Until then, the lever is `OMP_NUM_THREADS`
 and engaging the existing kernel via `--fast`.
 
@@ -99,5 +103,5 @@ CPU oracle stays the canonical verifier) — see [GPU-INTEGER-KERNEL.md](GPU-INT
   `src/trinote/infer_int/q1_native.py` · `tools/bonsai_q1_kernel.c` · `tools/build_bonsai_q1_kernel.sh` ·
   `src/trinote/infer_int/gpu_native.py` · `tools/bonsai_q1_gpu.cu` · `tools/build_bonsai_q1_gpu.sh` ·
   `tests/test_bonsai_smoke.py` · `tests/test_bonsai_gpu.py` · `tools/launch_bonsai_live.sh`
-- Field context: `~/research/bonsai-notarized/deterministic-inference.md` (why reduction order × FP
-  non-associativity is the root cause integer arithmetic sidesteps).
+- Design background: floating-point reduction order is not associative; the committed integer arithmetic
+  sidesteps that source of cross-machine drift.

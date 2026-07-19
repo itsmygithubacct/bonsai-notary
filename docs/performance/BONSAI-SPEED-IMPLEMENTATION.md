@@ -418,8 +418,7 @@ with context** (1.20x@L37 → 1.34x@L181; the isolated attention math is 10-51x,
 climbing — ~1.7x@L512, ~2.5x@L2048 extrapolated). Adversarially verified (5 agents); the pass also caught and
 fixed a latent fail-loud bound-check overflow (division-form fix, regression-tested).
 
-Three further kernels followed (design docs in `~/research/bonsai-notarized/optimization-scopes/`), all
-byte-exact and adversarially verified:
+Three further kernels followed, all byte-exact and adversarially verified:
 - **Native SiLU** (`bonsai_silu_i64`, `TRINOTE_NATIVE_SILU` default-on): reuses the integer-softmax helpers;
   **10.96× on the SiLU bucket → ~3.4% of decode**. The second realized decode win.
 - **int32 activation-LUT entries** (`TRINOTE_Q1_LUT32`, opt-in/default-off): halves the Q1 gather data, with

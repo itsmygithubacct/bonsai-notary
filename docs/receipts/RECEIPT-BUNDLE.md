@@ -5,7 +5,8 @@ notarized Bonsai inference *without trusting the producer*. It packages the rece
 preimage, the chain artifact, and a description of where the third entry landed on BSV, under a single
 manifest whose `bundleHash` commits every file.
 
-Two CLIs:
+The engine exposes one CLI with three subcommands (shown here by its console-script name; the module form
+used below works directly from the composed checkout):
 
 ```
 trinote-receipt-bundle pack    …            # build a bundle (directory or .tar.gz)
@@ -15,6 +16,12 @@ trinote-receipt-bundle inspect BUNDLE       # print the manifest + on-chain desc
 
 This is the consumer-facing counterpart to [`THIRD-ENTRY.md`](THIRD-ENTRY.md) (how the third entry is
 produced) and [`RECEIPTS.md`](RECEIPTS.md) (the receipt lifecycle).
+
+Receipted `./bonsai-notary` runs automatically create a local `.tar.gz` bundle under
+`$BONSAI_NOTARY_HOME/bundles`; use `--no-bundle` to opt out. In the REPL, `/bundle` packages the last
+receipt and `/verify` replays it. These local bundles include a plaintext transcript, so treat them as
+private unless you intend to disclose the prompt and answer. They never contain model weights or private
+signing keys.
 
 ---
 
@@ -45,8 +52,9 @@ so a single 32-byte value pins the whole package.
 
 When `rawTx` (the full signed transaction hex) is present, the bundle is self-contained and
 re-broadcastable, and the offline layer additionally checks `txid == hash256(rawTx)`. The same `rawTx`/txid
-of every third entry is also written to the off-chain **transaction log** (`artifacts/receipts/transactions.log`,
-JSONL) by `trinote-run-bonsai --tx-log` / `trinote-agent run --tx-log`, alongside the artifact `broadcast.log`.
+of every third entry is also written to the off-chain **transaction log**
+(`$BONSAI_NOTARY_HOME/receipts/transactions.log`, JSONL) by the notary's `--tx-log` option, alongside the
+dry-run `broadcast.log`.
 
 ### `onchain.json` — stateful (AgentTea `executeAction`)
 
@@ -89,38 +97,61 @@ provenance, not quality (see [`THIRD-ENTRY.md`](THIRD-ENTRY.md) §"Honest scope"
 
 ## Producing a bundle
 
-### Standalone
+### Local bundle (automatic)
 
 ```bash
-# 1. run an inference and save its {receipt,preimage}+emission. --onchain builds the third entry; add
-#    --chain-confirm to actually broadcast it (DRY-RUN otherwise — the two-key interlock).
-trinote-run-bonsai -p "…" --onchain --chain-confirm --save-bundle artifacts/bundles/in/
-# 2. package it (use the saved emission once the receipt was actually broadcast)
-trinote-receipt-bundle pack \
-    --receipt-bundle artifacts/bundles/in/receipt-<rh>.json \
-    --from-emission  artifacts/bundles/in/emission-<rh>.json \
-    -o artifacts/bundles/<rh> [--tar]
+./bonsai-notary "What is a Merkle tree?" --receipts -n 128
+# stderr prints: [bundle] $BONSAI_NOTARY_HOME/bundles/bonsai-<receiptHash>.tar.gz
+```
+
+This form records the local ledger as its Third Entry and is independently re-executable, but it does not
+claim a BSV transaction. To package a broadcast transaction descriptor, save the raw pack inputs as shown
+next.
+
+### Broadcast standalone or stateful bundle
+
+```bash
+export BONSAI_NOTARY_HOME="${BONSAI_NOTARY_HOME:-$HOME/.local/trinote}"
+INPUTS="$BONSAI_NOTARY_HOME/bundle-inputs"
+
+# --chain-confirm is required here because --from-emission rejects a dry-run txid.
+./bonsai-notary "Notarize this." --receipts --onchain --chain-confirm \
+  --save-bundle "$INPUTS"
+
+# Substitute the receiptHash printed by the run for <rh>. A stateful agentd action record is detected
+# automatically; otherwise this builds a standalone descriptor.
+PYTHONPATH=engine/bonsai/src engine/bonsai/.venv/bin/python \
+  -m trinote.cli.receipt_bundle_cli pack \
+  --receipt-bundle "$INPUTS/receipt-<rh>.json" \
+  --from-emission "$INPUTS/emission-<rh>.json" \
+  -o "$BONSAI_NOTARY_HOME/bundles/bonsai-<rh>.tar.gz" --tar
 ```
 
 `pack` also accepts `--txid <txid>` (build a standalone descriptor from a known txid) or `--onchain
 <file>` (an explicit descriptor).
 
-### Stateful
-
-`trinote-agent run` (see [`AGENT-LIFECYCLE.md`](../identity/AGENT-LIFECYCLE.md)) runs the inference, commits it
-as an `executeAction` under the identity, and packs the stateful bundle in one step (`--bundle-out`).
+For a stateful bundle, `--from-emission` derives both `onchain.json` and `identity.json` from the complete
+AgentTea action record and rejects incomplete or disagreeing identity data. See
+[`AGENT-LIFECYCLE.md`](../identity/AGENT-LIFECYCLE.md).
 
 ---
 
 ## Verifying a bundle
 
 ```bash
-trinote-receipt-bundle verify artifacts/bundles/<rh>                       # offline only (no deps, no network)
-trinote-receipt-bundle verify artifacts/bundles/<rh> --onchain            # + confirm on WhatsOnChain
-trinote-receipt-bundle verify artifacts/bundles/<rh> --onchain \
-    --reexec --artifact artifacts/model/atlas-notarized-bonsai-8b.safetensors   # + bit-exact re-run
+export BONSAI_NOTARY_HOME="${BONSAI_NOTARY_HOME:-$HOME/.local/trinote}"
+BUNDLE="$BONSAI_NOTARY_HOME/bundles/bonsai-<rh>.tar.gz"
+BUNDLE_CLI=(engine/bonsai/.venv/bin/python -m trinote.cli.receipt_bundle_cli)
+export PYTHONPATH=engine/bonsai/src
+
+"${BUNDLE_CLI[@]}" verify "$BUNDLE"                         # offline hashes/signatures
+"${BUNDLE_CLI[@]}" verify "$BUNDLE" --onchain               # + WhatsOnChain lookup
+"${BUNDLE_CLI[@]}" verify "$BUNDLE" --onchain --reexec \
+  --artifact "$BONSAI_NOTARY_HOME/models/Bonsai-27B-Q1_0-int-qwen35.safetensors"
 ```
 
 `verify` exits `0` when `VERIFIED`, non-zero otherwise. `--json` emits the full per-check result for
 machine consumers. The offline + on-chain layers need only the Python standard library (`urllib` for the
-WhatsOnChain fetch); `--reexec` is the only layer that loads the model.
+WhatsOnChain fetch); `--reexec` is the only layer that loads the model. The loader selects the Qwen3 or
+Qwen3.5 integer graph from the artifact metadata. Add `--oracle` to force the slow pure-NumPy path; the
+default native re-execution accelerator is required to remain byte-identical.

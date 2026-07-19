@@ -8,9 +8,9 @@ in so the engine source is never forked.
 
 | # | Piece | Repo / path | Language | Owns |
 |---|---|---|---|---|
-| 1 | Inference engine | `~/integer_inference_engine` → `engine/` | Python (NumPy) + C/CUDA kernels | byte-exact integer generation (`trinote`), receipt build/verify, bundle pack/verify |
-| 2 | On-chain software | `~/chain_c` → `chain_c/` | C | build/sign/broadcast BSV txs; AgentTea/RicardianTea contracts; WhatsOnChain client |
-| 3 | On-chain orchestration | `~/bsv_third_entry` → `bsv_third_entry/` | Python (stdlib) | drive the chain_c CLIs to publish the Third Entry + run the agent lifecycle |
+| 1 | Inference engine | `engine/` ([repository](https://github.com/itsmygithubacct/integer_inference_engine)) | Python (NumPy) + C/CUDA kernels | byte-exact integer generation (`trinote`), receipt build/verify, bundle pack/verify |
+| 2 | On-chain software | `chain_c/` ([repository](https://github.com/itsmygithubacct/chain_c)) | C | build/sign/broadcast BSV txs; AgentTea/RicardianTea contracts; WhatsOnChain client |
+| 3 | On-chain orchestration | `bsv_third_entry/` ([repository](https://github.com/itsmygithubacct/bsv_third_entry)) | Python (stdlib) | drive the chain_c CLIs to publish the Third Entry + run the agent lifecycle |
 | 4 | Notary glue | this repo | bash + Python | wallet, launchers, model identity, docs, shared-home wiring |
 
 Pieces 1–3 are independently versioned and consumed by reference (symlinks today; git submodules /
@@ -75,8 +75,8 @@ Both subsystems are pointed at one `$BONSAI_NOTARY_HOME` (default `~/.local/trin
 * the **engine** writes the receipt ledger, signing keys, sessions, and bundles there;
 * **chain_c** reads its key files from `$BONSAI_NOTARY_HOME/chain/*.json` (Elder / funding / agent keys).
 
-The launchers export `BONSAI_NOTARY_HOME` so the engine's own default (`~/.local/integer_inference_engine/…`)
-does not split state away from where the keys live. Nothing is ever written into a repo tree, so an
+The launchers export `BONSAI_NOTARY_HOME` so every component resolves the same state root instead of using
+component-specific defaults. Nothing is ever written into a repo tree, so an
 `rsync` of any repo never drags receipts, bundles, or secrets along.
 
 ## On-chain flavours — resumable by default
@@ -93,7 +93,8 @@ absent` with a deploy hint, and a real broadcast fails closed rather than spendi
 
 ## Migration: symlinks → GitHub
 
-`engine`, `chain_c`, `bsv_third_entry` are `.gitignore`d symlinks to absolute home paths. To publish:
+`engine`, `chain_c`, and `bsv_third_entry` are `.gitignore`d dependency links. To publish a pinned
+composition:
 
 1. Push each sibling to its own GitHub repo.
 2. Replace each symlink with a git submodule (or an `INSTALL.md` clone step) at the **same path**.

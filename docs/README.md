@@ -3,13 +3,15 @@
 `bonsai-notary` is a composition layer. The docs here fall into two groups:
 
 - **Composition & notary** — specific to how the four pieces fit and how the notary behaves.
-- **Inherited engine reference** — describe the *inference engine* itself (`engine/`,
-  `~/integer_inference_engine`). They are kept here as a convenience snapshot; the engine repo is the
-  authoritative home for engine internals. Some still use the original single-repo names (`src/trinote`
+- **Inherited engine reference** — describe the *inference engine* itself (`engine/`). They are kept here
+  as a convenience snapshot; the engine repo is the authoritative home for engine internals. Some still
+  use the original single-repo names (`src/trinote`
   → now `engine/bonsai/src/trinote`; the `trinote-*` CLIs are the engine's, surfaced here as `bonsai-*`).
 
 ## Composition & notary
 
+- [`BONSAI-27B.md`](BONSAI-27B.md) — choose/install the regular or deterministic 27B runtime; measured
+  resource use, receipts, context limits, bundles, Ricardian contracts, and Third Entries.
 - [`architecture/COMPOSED-ARCHITECTURE.md`](architecture/COMPOSED-ARCHITECTURE.md) — how the four pieces
   compose, where the on-chain seam is, and the symlink → GitHub migration path.
 - [`identity/AGENT-LIFECYCLE.md`](identity/AGENT-LIFECYCLE.md) — the stateful on-chain agent identity and
