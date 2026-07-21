@@ -58,6 +58,13 @@ def test_bootstrap_checks_out_locked_commits_and_rejects_dirty_trees(tmp_path):
     )
 
     deps = tmp_path / "checkouts"
+    # Simulate interruption after git init/remote setup but before a first
+    # checkout. Bootstrap must complete this clean, unborn repository.
+    interrupted = deps / "integer_inference_engine"
+    interrupted.mkdir(parents=True)
+    _git("init", cwd=interrupted)
+    _git("remote", "add", "origin", str(tmp_path / "remotes" / "integer_inference_engine.git"),
+         cwd=interrupted)
     env = os.environ.copy()
     env.update(
         BONSAI_DEPS_BASE=str(tmp_path / "remotes"),
@@ -72,6 +79,22 @@ def test_bootstrap_checks_out_locked_commits_and_rejects_dirty_trees(tmp_path):
         assert _git("rev-parse", "HEAD", cwd=deps / name).stdout.strip() == revision
         assert (deps / name / "revision.txt").read_text() == "pinned\n"
     assert (notary / "engine").resolve() == (deps / "integer_inference_engine").resolve()
+
+    # Never let ln turn an unexpected real directory into a nested link.
+    (notary / "engine").unlink()
+    (notary / "engine").mkdir()
+    rejected_link = subprocess.run(
+        [str(scripts / "bootstrap-deps.sh")], cwd=notary, env=env,
+        text=True, capture_output=True, check=False,
+    )
+    assert rejected_link.returncode == 2
+    assert "is not a symlink" in rejected_link.stderr
+    (notary / "engine").rmdir()
+    restored = subprocess.run(
+        [str(scripts / "bootstrap-deps.sh")], cwd=notary, env=env,
+        text=True, capture_output=True, check=False,
+    )
+    assert restored.returncode == 0, restored.stderr
 
     (deps / "chain_c" / "revision.txt").write_text("dirty\n")
     rejected = subprocess.run(

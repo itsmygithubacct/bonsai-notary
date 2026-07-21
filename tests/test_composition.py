@@ -162,3 +162,10 @@ def test_duplicate_prompt_is_rejected():
     result = _dryrun("first", "--prompt", "second")
     assert result.returncode == 2
     assert "PROMPT supplied more than once" in result.stderr
+
+
+@pytest.mark.parametrize("args", [("",), ("--prompt", ""), ("--prompt=",)])
+def test_empty_prompt_is_rejected(args):
+    result = _dryrun(*args)
+    assert result.returncode == 2
+    assert "non-empty PROMPT" in result.stderr
