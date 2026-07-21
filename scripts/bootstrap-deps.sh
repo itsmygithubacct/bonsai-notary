@@ -54,7 +54,14 @@ for name in integer_inference_engine chain_c bsv_third_entry; do
       echo "  commit/stash them, or use BONSAI_DEPS_ALLOW_DIRTY=1 for development only" >&2
       exit 2
     fi
-    current="$(git -C "$dest" rev-parse HEAD)"
+    if ! current="$(git -C "$dest" rev-parse HEAD 2>/dev/null)"; then
+      # Resume a checkout whose clone/init reached .git but was interrupted
+      # before the first locked commit was installed.
+      echo "→ completing interrupted $name checkout at locked revision $revision"
+      git -C "$dest" fetch origin
+      git -C "$dest" checkout --detach "$revision"
+      current="$revision"
+    fi
     if [ "$current" != "$revision" ]; then
       if [ "${BONSAI_DEPS_UPDATE:-0}" != 1 ]; then
         echo "bootstrap-deps.sh: $name is at $current, expected locked revision $revision" >&2
@@ -80,6 +87,10 @@ for name in integer_inference_engine chain_c bsv_third_entry; do
   # parent dir, else an absolute path to a custom BONSAI_DEPS_DIR.
   link="$here/$(link_name "$name")"
   if [ "$DEPS_DIR" = "$parent" ]; then target="../$name"; else target="$dest"; fi
+  if { [ -e "$link" ] || [ -L "$link" ]; } && [ ! -L "$link" ]; then
+    echo "bootstrap-deps.sh: $link exists and is not a symlink; refusing to replace it" >&2
+    exit 2
+  fi
   ln -sfn "$target" "$link"
   printf '  linked %-16s -> %s\n' "$(link_name "$name")" "$(readlink "$link")"
 done

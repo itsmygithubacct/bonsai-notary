@@ -383,7 +383,7 @@ write_manifest() {
   local ready="$1"
   SETUP_ROOT="$ROOT" SETUP_PUBLIC="$public_mode" SETUP_READY="$ready" \
   SETUP_ROLE_DIR="$role_dir" "$engine_py" - <<'PY'
-import json, os
+import json, os, tempfile
 from pathlib import Path
 
 home = Path(os.environ["BONSAI_NOTARY_HOME"])
@@ -401,12 +401,30 @@ data = {
         "counterparty": str(Path(os.environ["SETUP_ROLE_DIR"]) / "counterparty.key.json"),
     },
 }
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
+fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
 try:
-    os.write(fd, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode())
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as manifest:
+        fd = -1
+        manifest.write(payload)
+        manifest.flush()
+        os.fsync(manifest.fileno())
+    os.replace(tmp, path)
+    tmp = ""
+    dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 finally:
-    os.close(fd)
-os.chmod(path, 0o600)
+    if fd >= 0:
+        os.close(fd)
+    if tmp:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 PY
 }
 

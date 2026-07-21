@@ -93,6 +93,13 @@ def test_setup_validates_existing_artifact_and_checks_resume_disk_space():
     assert "--skip-model-import is valid only when a completed artifact is already present" in script
 
 
+def test_setup_manifest_is_private_atomic_and_durable():
+    script = SETUP.read_text()
+    assert "tempfile.mkstemp" in script and "os.fchmod(fd, 0o600)" in script
+    assert "os.replace(tmp, path)" in script
+    assert "os.fsync(manifest.fileno())" in script and "os.fsync(dir_fd)" in script
+
+
 def test_dependency_lock_has_one_full_commit_per_repository():
     entries = {}
     for line in (ROOT / "dependencies.lock").read_text().splitlines():
