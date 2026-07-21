@@ -37,6 +37,7 @@ Third Entry:
   --funding-check-only        recheck an existing public setup; do not build/download anything
 
 Installation controls:
+  --python VERSION            uv-managed Python for a new venv (default: 3.12; minimum: 3.11)
   --yes                       accept safe defaults; never implies a blockchain broadcast
   --skip-system-packages      require prerequisites to be installed already
   --skip-model-download       do not download the 3.80 GB pinned GGUF
@@ -74,6 +75,7 @@ skip_model_import=0
 skip_tests=0
 dry_run=0
 jobs="${JOBS:-}"
+python_spec="${BONSAI_PYTHON_VERSION:-3.12}"
 
 while (($#)); do
   case "$1" in
@@ -95,6 +97,8 @@ while (($#)); do
     --deploy-agent) deploy_agent=1 ;;
     --confirm-mainnet) confirm_mainnet=1 ;;
     --funding-check-only) funding_check_only=1 ;;
+    --python) (($# >= 2)) || die 2 "--python needs a version"; python_spec="$2"; shift ;;
+    --python=*) python_spec="${1#*=}" ;;
     --skip-system-packages) skip_system_packages=1 ;;
     --skip-model-download) skip_model_download=1 ;;
     --skip-model-import) skip_model_import=1 ;;
@@ -108,6 +112,7 @@ while (($#)); do
 done
 
 [[ "$minimum_sats" =~ ^[1-9][0-9]*$ ]] || die 2 "--minimum-satoshis must be a positive integer"
+[ -n "$python_spec" ] || die 2 "--python must not be empty"
 if [ -n "$jobs" ]; then
   [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || die 2 "--jobs must be a positive integer"
 else
@@ -186,6 +191,7 @@ if [ "$dry_run" = 1 ]; then
   info "keys: $key_mode"
   info "Third Entry: $public_mode"
   info "system packages: $([ "$skip_system_packages" = 1 ] && echo skip || echo install/verify)"
+  info "Python: $python_spec (uv-managed; downloaded if absent)"
   info "model GGUF: $([ "$skip_model_download" = 1 ] && echo skip || echo download+checksum)"
   info "integer artifact: $([ "$skip_model_import" = 1 ] && echo skip || echo import)"
   info "tests: $([ "$skip_tests" = 1 ] && echo skip || echo offline suites)"
@@ -250,7 +256,40 @@ install_uv() {
 }
 
 wallet_py="$ROOT/wallet/notary_wallet.py"
-engine_py="$ROOT/engine/bonsai/.venv/bin/python"
+engine_venv="$ROOT/engine/bonsai/.venv"
+engine_py="$engine_venv/bin/python"
+
+backup_engine_venv() {
+  local reason="$1" version backup suffix=0
+  version="$($engine_py -c 'import platform; print(platform.python_version())' 2>/dev/null || printf unknown)"
+  backup="$engine_venv.$reason-python-$version"
+  while [ -e "$backup" ] || [ -L "$backup" ]; do
+    suffix=$((suffix + 1))
+    backup="$engine_venv.$reason-python-$version.$suffix"
+  done
+  mv "$engine_venv" "$backup"
+  warn "preserved incompatible engine environment at $backup"
+}
+
+engine_python_supported() {
+  "$engine_py" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+    >/dev/null 2>&1
+}
+
+ensure_engine_environment() {
+  if { [ -e "$engine_venv" ] || [ -L "$engine_venv" ]; } && [ ! -x "$engine_py" ]; then
+    backup_engine_venv incomplete
+  elif [ -x "$engine_py" ] && ! engine_python_supported; then
+    backup_engine_venv unsupported
+  fi
+  if [ ! -x "$engine_py" ]; then
+    env UV_PYTHON_INSTALL_DIR="$notary_home/tools/python" \
+      "$uv_bin" venv --managed-python --python "$python_spec" "$engine_venv"
+  fi
+  engine_python_supported || die 2 \
+    "the resolved engine Python is unsupported; Bonsai pins require Python >=3.11 (requested $python_spec)"
+  info "engine Python: $($engine_py -c 'import platform; print(platform.python_version())') ($engine_py)"
+}
 
 validate_role_keys() {
   local file
@@ -389,9 +428,7 @@ say "Cloning/wiring the three dependency repositories"
 "$ROOT/scripts/bootstrap-deps.sh"
 
 say "Creating the deterministic inference environment"
-if [ ! -x "$engine_py" ]; then
-  (cd "$ROOT/engine/bonsai" && "$uv_bin" venv --python python3)
-fi
+ensure_engine_environment
 "$uv_bin" pip install --python "$engine_py" \
   -r "$ROOT/requirements_notary.txt" -r "$ROOT/requirements_wallet.txt" -r "$ROOT/requirements_test.txt"
 

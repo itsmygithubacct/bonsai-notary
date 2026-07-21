@@ -66,7 +66,7 @@ ctest --test-dir chain_c/build --output-on-failure -LE net      # optional: run 
 
 ```bash
 # Python runtime for the inference engine (numpy + safetensors + ecdsa); the notary glue is stdlib.
-(cd engine/bonsai && uv venv)
+(cd engine/bonsai && uv venv --managed-python --python 3.12)
 uv pip install --python engine/bonsai/.venv/bin/python -r requirements_notary.txt
 
 # Native packed-Q1 CPU kernel (byte-identical accelerator); built under $BONSAI_NOTARY_HOME/bin.

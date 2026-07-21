@@ -14,6 +14,7 @@ keys are never overwritten silently.
 | Information or resource | Required when | Notes |
 |---|---|---|
 | Linux host with `sudo` or preinstalled build dependencies | Always | Debian/Ubuntu (`apt`) and Fedora (`dnf`) package installation is automated. |
+| Python 3.11+ | Always | Setup defaults to a uv-managed Python 3.12 and downloads it automatically; the host's older `python3` is not used for the engine environment. |
 | Internet access to GitHub, Hugging Face, Astral, and PyPI | Fresh install | The 27B GGUF is public; no Hugging Face token is normally needed. |
 | About 16 GB free disk | Full 27B install | The verified GGUF is 3.80 GB and its deterministic artifact is about 4.23 GB; conversion needs working room. Setup refuses a new download below its 12,000,000 KiB safety floor. |
 | At least 12 GB RAM; 16 GB recommended | Running deterministic 27B | An NVIDIA GPU is optional. CPU-only installs work but inference and fresh-oracle receipt replay are slower. |
@@ -180,7 +181,8 @@ In order, the script:
 1. installs or verifies Linux compiler, CMake, crypto, HTTP, Python, and Git prerequisites;
 2. installs a pinned `uv` without editing shell startup files when `uv` is absent;
 3. clones and wires `integer_inference_engine`, `chain_c`, and `bsv_third_entry`;
-4. creates the engine uv environment with inference, wallet, and test dependencies;
+4. creates the engine uv environment with a supported uv-managed Python (3.12 by default) plus inference,
+   wallet, and test dependencies;
 5. builds `chain_c` outside the source checkout and runs its offline tests;
 6. builds the portable byte-exact CPU Q1 kernel and the pinned CPU-only `llama-tokenize` required for exact
    Qwen tokenization; when `nvcc` exists, it also builds the optional CUDA producer;
@@ -201,6 +203,9 @@ under `$BONSAI_NOTARY_HOME`. The three dependency source checkouts sit next to `
 ```
 
 - **No NVIDIA/CUDA:** expected; setup reports CPU-only mode. Local receipts remain valid.
+- **Custom Python:** pass `--python 3.11` (or set `BONSAI_PYTHON_VERSION`) to override the default 3.12.
+  Python older than 3.11 is rejected before dependency installation. A partial venv created by an older
+  setup is moved aside with an `.unsupported-python-*` suffix instead of being deleted.
 - **Insufficient disk:** free at least 16 GB under the state-home filesystem and rerun. Downloads resume.
 - **Funding check API error:** this is different from zero funds and exits with an API/network error. Retry
   when WhatsOnChain is reachable; no broadcast is attempted.

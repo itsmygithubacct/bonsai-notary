@@ -7,6 +7,7 @@
 #   uv pip install --python engine/bonsai/.venv/bin/python -r requirements_notary.txt
 #
 # The on-chain software (chain_c) is C — built separately with cmake, NOT a pip dependency.
+# These pins require Python >=3.11. The all-in-one setup defaults to uv-managed Python 3.12.
 # The self-managed BSV HD wallet is optional (only if you fund/sign in Python instead of letting
 # chain_c hold keys):  uv pip install -r requirements_wallet.txt
 # Tests need pytest:    uv pip install -r requirements_test.txt
