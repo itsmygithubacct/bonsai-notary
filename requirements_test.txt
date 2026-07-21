@@ -1,4 +1,4 @@
-# Test/CI dependencies for bonsai-notarized-bitnet (installed into the uv venv).
-# Runtime deps are pulled in from requirements_atlas_notarized.txt; this adds only the test runner.
--r requirements_atlas_notarized.txt
+# Test/CI dependencies for the composed notary (installed into the engine uv venv).
+# Keep the runtime pins in one place; setup-bonsai-27b.sh installs this file directly.
+-r requirements_notary.txt
 pytest==9.1.0

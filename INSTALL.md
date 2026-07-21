@@ -8,6 +8,17 @@ generated state and weights live under `$BONSAI_NOTARY_HOME` (default `~/.local/
 
 > The state/secrets home (`~/.local/trinote`) lives OUTSIDE this repo — never copy or ship it.
 
+For a fresh receipt-capable **Bonsai-27B agent**, the recommended path is the idempotent all-in-one
+installer rather than the manual steps below:
+
+```bash
+./scripts/setup-bonsai-27b.sh
+```
+
+It also provisions or imports signing identities and fails loudly when public Third Entry mode is requested
+without wallet funds. See [`docs/SETUP-BONSAI-27B.md`](docs/SETUP-BONSAI-27B.md) for required information,
+unattended examples, funding, and the separately confirmed one-time AgentTea deployment.
+
 ## 0. Prerequisites
 
 | Need | For |
@@ -60,6 +71,8 @@ uv pip install --python engine/bonsai/.venv/bin/python -r requirements_notary.tx
 
 # Native packed-Q1 CPU kernel (byte-identical accelerator); built under $BONSAI_NOTARY_HOME/bin.
 engine/bonsai/tools/build_bonsai_q1_kernel.sh
+# Exact Qwen tokenizer required by deterministic inference (CPU-only; CUDA is not required).
+./scripts/install-llama-tokenizer.sh
 # Optional per-host CUDA kernel (needs nvcc); --gpu falls back to the CPU oracle when absent.
 engine/bonsai/tools/build_bonsai_q1_gpu.sh        # optional
 ```

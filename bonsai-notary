@@ -50,6 +50,21 @@ export BONSAI_ENGINE_DIR="$ENGINE_DIR" BONSAI_CHAIN_C_DIR="$CHAIN_C_DIR"
 # --- unified state/secrets home (engine receipts/keys AND chain_c key files) ---
 export BONSAI_NOTARY_HOME="${BONSAI_NOTARY_HOME:-$HOME/.local/trinote}"
 
+# A setup-created AgentTea identity uses stable role key paths under the private state home. Export
+# them only when the caller did not choose explicit paths. The same Agent/Counterparty WIF files are
+# also passed to the receipt engine below, binding the first two receipt signatures to the public
+# keys committed by the on-chain identity instead of silently creating unrelated receipt signers.
+ROLE_KEYS_DIR="$BONSAI_NOTARY_HOME/agent/keys"
+if [ -z "${ELDER_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/elder.key.json" ]; then
+    export ELDER_KEY_FILE="$ROLE_KEYS_DIR/elder.key.json"
+fi
+if [ -z "${AGENT_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/agent.key.json" ]; then
+    export AGENT_KEY_FILE="$ROLE_KEYS_DIR/agent.key.json"
+fi
+if [ -z "${COUNTERPARTY_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/counterparty.key.json" ]; then
+    export COUNTERPARTY_KEY_FILE="$ROLE_KEYS_DIR/counterparty.key.json"
+fi
+
 [ -d "$ENGINE_SRC" ] || { echo "bonsai-notary: engine not found at $ENGINE_SRC (check the 'engine' symlink)" >&2; exit 4; }
 
 PY="$ENGINE_DIR/bonsai/.venv/bin/python"; [ -x "$PY" ] || PY="python3"
@@ -136,6 +151,9 @@ weight_args=()
 [ -e "$IDENTITY" ] && weight_args+=(--identity "$IDENTITY")
 
 gpu_args=(); [ "$GPU" = "1" ] && gpu_args=(--gpu)
+signing_args=()
+[ -n "${AGENT_KEY_FILE:-}" ] && signing_args+=(--model-key "$AGENT_KEY_FILE")
+[ -n "${COUNTERPARTY_KEY_FILE:-}" ] && signing_args+=(--counterparty-key "$COUNTERPARTY_KEY_FILE")
 
 case "$mode" in
     repl)    base=(--repl --chat --fast "${gpu_args[@]+"${gpu_args[@]}"}" "$receipt") ;;
@@ -144,7 +162,8 @@ case "$mode" in
 esac
 
 cmd=("$PY" -m bsv_third_entry.engine_run "${base[@]}" "${weight_args[@]+"${weight_args[@]}"}"
-     "${model_args[@]+"${model_args[@]}"}" "${prompt_args[@]+"${prompt_args[@]}"}" "$@")
+     "${model_args[@]+"${model_args[@]}"}" "${signing_args[@]+"${signing_args[@]}"}"
+     "${prompt_args[@]+"${prompt_args[@]}"}" "$@")
 
 # json / one-shot emit only model output unless --verbose; diagnostics go to stderr.
 quiet_stderr=0

@@ -18,6 +18,7 @@ Run from the bonsai-notary checkout with its venv:
 from __future__ import annotations
 
 import importlib.util
+import json
 import stat
 import sys
 from pathlib import Path
@@ -231,3 +232,50 @@ def test_gen_mnemonic_cli_leaks_no_secret(wallet_home, capsys):
     assert mnemonic not in blob
     for wif in _all_wifs():
         assert wif not in blob
+
+
+def test_import_mnemonic_is_validated_idempotent_and_secret_safe(wallet_home, tmp_path, capsys):
+    mnemonic = nw.load_mnemonic()
+    source = tmp_path / "seed.txt"
+    source.write_text(mnemonic + "\n", encoding="utf-8")
+
+    # Importing the same seed is idempotent and the CLI never echoes it.
+    assert nw.main(["import-mnemonic", "--file", str(source)]) == 0
+    out = capsys.readouterr()
+    assert mnemonic not in out.out + out.err
+    assert nw.load_mnemonic() == mnemonic
+
+    with pytest.raises(SystemExit, match="BIP39"):
+        nw.import_mnemonic("this is not a valid mnemonic")
+
+
+def test_validate_keyfile_prints_public_metadata_only(wallet_home, capsys):
+    path = nw.keyfile(*nw.ROLES["agent"], label="agent")
+    wif = nw.load_keyfile(str(path)).wif()
+    assert nw.main(["validate-keyfile", "--path", str(path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["address"] == nw._key(*nw.ROLES["agent"]).address()
+    assert payload["publicKeyHex"]
+    assert wif not in json.dumps(payload)
+
+
+def test_funding_status_cli_exits_three_and_names_deposit_address(wallet_home, monkeypatch, capsys):
+    _patch_balances(monkeypatch, _balmap({}))
+    assert nw.main(["funding-status", "--need", "12000"]) == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "allowUnconfirmed": False,
+        "depositAddress": _addr(*nw.ROLES["elder"]),
+        "funded": False,
+        "needSatoshis": 12000,
+        "reason": "no wallet-derived address with ≥ 12000 sats (allow_unconfirmed=False); fund one or fan-out first",
+    }
+
+
+def test_funding_status_cli_reports_covering_wallet_address(wallet_home, monkeypatch, capsys):
+    _patch_balances(monkeypatch, _balmap({(1, 4): (0, 15000)}))
+    assert nw.main(["funding-status", "--need", "12000", "--allow-unconfirmed"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["funded"] is True
+    assert payload["address"] == _addr(1, 4)
+    assert payload["satoshis"] == 15000

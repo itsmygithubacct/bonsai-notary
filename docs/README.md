@@ -10,6 +10,8 @@
 
 ## Composition & notary
 
+- [`SETUP-BONSAI-27B.md`](SETUP-BONSAI-27B.md) — clone-to-ready setup, required information,
+  mnemonic/signing-key provisioning, funding preflight, and optional AgentTea deployment.
 - [`BONSAI-27B.md`](BONSAI-27B.md) — choose/install the regular or deterministic 27B runtime; measured
   resource use, receipts, context limits, bundles, Ricardian contracts, and Third Entries.
 - [`architecture/COMPOSED-ARCHITECTURE.md`](architecture/COMPOSED-ARCHITECTURE.md) — how the four pieces
