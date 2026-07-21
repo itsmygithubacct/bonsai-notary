@@ -39,8 +39,12 @@ get them is the bootstrap script — it clones all three from GitHub and wires t
 
 ```bash
 ./scripts/bootstrap-deps.sh                        # clone siblings + link engine/ chain_c/ bsv_third_entry/
-BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh   # (later) fast-forward the sibling checkouts
+BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh   # (later) sync clean checkouts to updated lock SHAs
 ```
+
+[`dependencies.lock`](dependencies.lock) pins one full commit ID per repository. Fresh hosts therefore
+receive the exact engine, C chain layer, and orchestrator revision tested together. The bootstrap refuses
+dirty trees and revision drift; `BONSAI_DEPS_ALLOW_DIRTY=1` exists only for deliberate local development.
 
 Prefer your own checkouts? Point the env vars (`BONSAI_ENGINE_DIR`, `BONSAI_CHAIN_C_DIR`,
 `BONSAI_BSV_TE_DIR`) at them, symlink them by hand, or add them as git submodules at those paths —
@@ -137,6 +141,7 @@ uv pip install -r requirements_wallet.txt
 
 ```bash
 ./bonsai-notary "What is a tensor?"                          # deterministic generation, model output
+./bonsai-notary --model 27b --prompt "What is a tensor?" -n 64 # explicit prompt when options come first
 ./bonsai-notary "Explain Merkle proofs." --receipts -n 128   # + verified local receipt
 ./bonsai-notary "Notarize this." --receipts --onchain        # + chain_c Third Entry (DRY-RUN)
 

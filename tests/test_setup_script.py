@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "scripts" / "setup-bonsai-27b.sh"
 TOKENIZER_SETUP = ROOT / "scripts" / "install-llama-tokenizer.sh"
+BOOTSTRAP = ROOT / "scripts" / "bootstrap-deps.sh"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -17,7 +18,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_setup_script_is_valid_bash():
-    for script in (SETUP, TOKENIZER_SETUP):
+    for script in (SETUP, TOKENIZER_SETUP, BOOTSTRAP):
         result = subprocess.run(["bash", "-n", str(script)], text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
 
@@ -82,3 +83,25 @@ def test_mainnet_confirmation_cannot_be_supplied_without_deployment():
     )
     assert result.returncode == 2
     assert "--confirm-mainnet requires --deploy-agent" in result.stderr
+
+
+def test_setup_validates_existing_artifact_and_checks_resume_disk_space():
+    script = SETUP.read_text()
+    assert "required_kib=$((required_kib + 6000000))" in script
+    assert "trinote.cli.validate_bonsai_artifact_cli" in script
+    assert '--architecture qwen35 --identity "$release_identity"' in script
+    assert "--skip-model-import is valid only when a completed artifact is already present" in script
+
+
+def test_dependency_lock_has_one_full_commit_per_repository():
+    entries = {}
+    for line in (ROOT / "dependencies.lock").read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, revision = line.split()
+        assert len(revision) == 40
+        assert revision == revision.lower()
+        int(revision, 16)
+        assert name not in entries
+        entries[name] = revision
+    assert set(entries) == {"integer_inference_engine", "chain_c", "bsv_third_entry"}

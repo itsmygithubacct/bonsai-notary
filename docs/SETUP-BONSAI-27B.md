@@ -16,7 +16,7 @@ keys are never overwritten silently.
 | Linux host with `sudo` or preinstalled build dependencies | Always | Debian/Ubuntu (`apt`) and Fedora (`dnf`) package installation is automated. |
 | Python 3.11+ | Always | Setup defaults to a uv-managed Python 3.12 and downloads it automatically; the host's older `python3` is not used for the engine environment. |
 | Internet access to GitHub, Hugging Face, Astral, and PyPI | Fresh install | The 27B GGUF is public; no Hugging Face token is normally needed. |
-| About 16 GB free disk | Full 27B install | The verified GGUF is 3.80 GB and its deterministic artifact is about 4.23 GB; conversion needs working room. Setup refuses a new download below its 12,000,000 KiB safety floor. |
+| About 16 GB free disk | Full 27B install | The verified GGUF is 3.80 GB and its deterministic artifact is about 4.23 GB; conversion needs working room. Setup checks the space needed for every missing output, including artifact-only resume runs. |
 | At least 12 GB RAM; 16 GB recommended | Running deterministic 27B | An NVIDIA GPU is optional. CPU-only installs work but inference and fresh-oracle receipt replay are slower. |
 | Signing-key choice | Always | Generate a new BIP39 wallet, import an existing BIP39 mnemonic, import three `{wif,address}` JSON files, or reuse a prior setup. |
 | BSV funds | Only for public Third Entries | At least 12,000 satoshis at one wallet-derived address by default. Setup only checks; it does not acquire funds. |
@@ -180,7 +180,7 @@ In order, the script:
 
 1. installs or verifies Linux compiler, CMake, crypto, HTTP, Python, and Git prerequisites;
 2. installs a pinned `uv` without editing shell startup files when `uv` is absent;
-3. clones and wires `integer_inference_engine`, `chain_c`, and `bsv_third_entry`;
+3. clones and wires the immutable `integer_inference_engine`, `chain_c`, and `bsv_third_entry` commits in `dependencies.lock`;
 4. creates the engine uv environment with a supported uv-managed Python (3.12 by default) plus inference,
    wallet, and test dependencies;
 5. builds `chain_c` outside the source checkout and runs its offline tests;
@@ -188,7 +188,8 @@ In order, the script:
    Qwen tokenization; when `nvcc` exists, it also builds the optional CUDA producer;
 7. validates/provisions the three signing roles and binds receipt signing to AgentTea;
 8. downloads and SHA-256-verifies the pinned 27B GGUF;
-9. imports the 4,096-token deterministic artifact;
+9. imports the 4,096-token deterministic artifact through an atomic temporary file, then hashes the complete
+   safetensors file and validates it against the pinned release identity and quality gate;
 10. runs composition/Third Entry tests and a no-inference command-resolution smoke test;
 11. when requested, checks wallet funding and optionally performs one explicitly confirmed deployment.
 
@@ -209,8 +210,9 @@ under `$BONSAI_NOTARY_HOME`. The three dependency source checkouts sit next to `
 - **Insufficient disk:** free at least 16 GB under the state-home filesystem and rerun. Downloads resume.
 - **Funding check API error:** this is different from zero funds and exits with an API/network error. Retry
   when WhatsOnChain is reachable; no broadcast is attempted.
-- **Interrupted download/import:** rerun. The pinned GGUF download uses a `.part` file and resumes; an already
-  verified GGUF or completed artifact is reused.
+- **Interrupted download/import:** rerun. The pinned GGUF download uses a `.part` file and resumes; artifact
+  imports write a same-filesystem temporary file and only replace the final path after completion. Every reused
+  artifact is revalidated against its release hash, identity, and quality gate before setup can report ready.
 - **Existing different keys:** setup refuses to replace them. Move the old state home aside only after a
   verified backup, or select a different `--notary-home`.
 - **Custom state location:** pass `--notary-home /private/path` on every setup run and export the same

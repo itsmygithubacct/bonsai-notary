@@ -139,3 +139,26 @@ def test_unknown_model_fails_before_inference():
     result = _dryrun("hello", "--model", "99b")
     assert result.returncode == 2
     assert "unknown model" in result.stderr
+
+
+def test_options_before_prompt_require_explicit_prompt_and_preserve_values():
+    ambiguous = _dryrun("-n", "1", "hello world")
+    assert ambiguous.returncode == 2
+    assert "explicit --prompt PROMPT" in ambiguous.stderr
+
+    result = _dryrun(
+        "--model", "27b", "--context-size", "4096", "--seed", "42",
+        "--prompt", "hello world", "-n", "1",
+    )
+    assert result.returncode == 0, result.stderr
+    command = result.stdout
+    assert "-p hello\\ world" in command
+    assert "--context-size 4096" in command
+    assert "--seed 42" in command
+    assert "-n 1" in command
+
+
+def test_duplicate_prompt_is_rejected():
+    result = _dryrun("first", "--prompt", "second")
+    assert result.returncode == 2
+    assert "PROMPT supplied more than once" in result.stderr

@@ -41,7 +41,7 @@ Installation controls:
   --yes                       accept safe defaults; never implies a blockchain broadcast
   --skip-system-packages      require prerequisites to be installed already
   --skip-model-download       do not download the 3.80 GB pinned GGUF
-  --skip-model-import         do not build the ~4.23 GB deterministic artifact
+  --skip-model-import         reuse an existing validated artifact; fail if absent
   --skip-tests                skip offline C/Python tests (the dry-run wiring check still runs)
   --jobs N                    parallel build/test jobs (default: min(CPU threads, 8))
   --dry-run                   print the resolved plan without changing the machine
@@ -456,13 +456,28 @@ fi
 provision_keys
 
 models_dir="${BONSAI_MODELS_DIR:-$notary_home/models}"
+mkdir -p "$models_dir"
 gguf="$models_dir/Bonsai-27B-Q1_0.gguf"
 artifact="$models_dir/Bonsai-27B-Q1_0-int-qwen35.safetensors"
+release_identity="$ROOT/engine/bonsai/artifacts/atlas-notarized-bonsai-27b.identity.json"
+
+# Resume-aware free-space guard. A pre-existing GGUF still needs room for the
+# artifact; checking only when the download is absent can fill the filesystem
+# during the much larger import output.
+required_kib=0
+if [ "$skip_model_download" = 0 ] && [ ! -f "$gguf" ]; then
+  required_kib=$((required_kib + 5000000))
+fi
+if [ "$skip_model_import" = 0 ] && [ ! -f "$artifact" ]; then
+  required_kib=$((required_kib + 6000000))
+fi
+if ((required_kib > 0)); then
+  free_kib="$(df -Pk "$models_dir" | awk 'NR==2 {print $4}')"
+  ((free_kib >= required_kib)) ||
+    die 2 "less than $required_kib KiB free under $notary_home for the missing 27B model outputs"
+fi
+
 if [ "$skip_model_download" = 0 ]; then
-  free_kib="$(df -Pk "$notary_home" | awk 'NR==2 {print $4}')"
-  if [ ! -f "$gguf" ] && ((free_kib < 12000000)); then
-    die 2 "less than 12,000,000 KiB free under $notary_home; the GGUF + imported artifact need more space"
-  fi
   say "Downloading and checksum-verifying the pinned 3.80 GB Bonsai-27B GGUF"
   BONSAI_NOTARY_HOME="$notary_home" "$ROOT/engine/bonsai/scripts/fetch_bonsai_27b_gguf.sh"
 fi
@@ -477,7 +492,14 @@ if [ "$skip_model_import" = 0 ]; then
       -m trinote.cli.import_bonsai35_gguf_cli \
       --gguf "$gguf" --out "$artifact" --context-len 4096
   fi
+elif [ ! -f "$artifact" ]; then
+  die 2 "27B artifact missing at $artifact; --skip-model-import is valid only when a completed artifact is already present"
 fi
+
+say "Validating the complete 27B artifact, release identity, and quality gate"
+PYTHONPATH="$ROOT/engine/bonsai/src" "$engine_py" \
+  -m trinote.cli.validate_bonsai_artifact_cli \
+  --artifact "$artifact" --architecture qwen35 --identity "$release_identity"
 
 if [ "$skip_tests" = 0 ]; then
   say "Running offline composition and Third Entry tests"
