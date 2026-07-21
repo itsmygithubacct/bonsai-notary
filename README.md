@@ -48,8 +48,10 @@ For a manual or non-27B composition install, wire only the sibling repositories 
 `bootstrap-deps.sh` clones [`integer_inference_engine`](https://github.com/itsmygithubacct/integer_inference_engine),
 [`chain_c`](https://github.com/itsmygithubacct/chain_c), and
 [`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry) into the parent directory and
-links them in as `engine/`, `chain_c/`, `bsv_third_entry/`. It is idempotent — re-run any time, and
-`BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh` fast-forwards the checkouts. Already have them?
+links them in as `engine/`, `chain_c/`, `bsv_third_entry/`. Every clone is checked out at the full commit
+recorded in [`dependencies.lock`](dependencies.lock), so separate hosts install the same tested composition.
+It is idempotent; after updating this notary checkout, `BONSAI_DEPS_UPDATE=1 ./scripts/bootstrap-deps.sh`
+moves clean dependency trees to the newly locked commits. Dirty or mismatched trees fail closed. Already have them?
 Point `BONSAI_ENGINE_DIR` / `BONSAI_CHAIN_C_DIR` / `BONSAI_BSV_TE_DIR` at your own checkouts instead.
 Then follow **`INSTALL.md`** (build chain_c, create the engine venv + native kernel, fetch weights).
 
@@ -70,6 +72,9 @@ into `$BONSAI_NOTARY_HOME/models`, or reuses a verified local checkout via `BONS
 ```bash
 # one-shot completion (deterministic integer engine, model output only)
 ./bonsai-notary "What is a tensor?"
+
+# if engine options must precede the prompt, make the prompt explicit
+./bonsai-notary --model 27b --context-size 4096 --prompt "What is a tensor?" -n 64
 
 # notarized: emit + verify a local receipt
 ./bonsai-notary "Explain Merkle proofs." --receipts -n 128
@@ -172,7 +177,7 @@ On-chain broadcasts are **DRY-RUN by default**. A real spend needs **both** `--c
 
 `engine`, `chain_c`, and `bsv_third_entry` are **symlinks** to sibling checkouts of the three
 dependency repos — they're `.gitignore`d and never committed. `./scripts/bootstrap-deps.sh` creates
-them for you by cloning the siblings from GitHub. Every launcher resolves through `./engine`,
+them for you by cloning the immutable revisions in `dependencies.lock` from GitHub. Every launcher resolves through `./engine`,
 `./chain_c`, `./bsv_third_entry`, and each is env-overridable (`BONSAI_ENGINE_DIR`,
 `BONSAI_CHAIN_C_DIR`, `BONSAI_BSV_TE_DIR`) — so you can instead point at your own checkouts, or add
 them as **git submodules** at the same paths, with nothing else to change.
