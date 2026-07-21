@@ -10,6 +10,19 @@ BSV_TE_DIR="${BONSAI_BSV_TE_DIR:-$ROOT/bsv_third_entry}"
 PY="${BONSAI_ENGINE_DIR:-$ROOT/engine}/bonsai/.venv/bin/python"; [ -x "$PY" ] || PY="python3"
 export PYTHONPATH="$BSV_TE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
+# setup-bonsai-27b.sh installs the three WIF keyfiles at stable role paths. Honor explicit
+# operator overrides first; otherwise make those setup-created roles available to agentd.
+ROLE_KEYS_DIR="$BONSAI_NOTARY_HOME/agent/keys"
+if [ -z "${ELDER_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/elder.key.json" ]; then
+    export ELDER_KEY_FILE="$ROLE_KEYS_DIR/elder.key.json"
+fi
+if [ -z "${AGENT_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/agent.key.json" ]; then
+    export AGENT_KEY_FILE="$ROLE_KEYS_DIR/agent.key.json"
+fi
+if [ -z "${COUNTERPARTY_KEY_FILE:-}" ] && [ -f "$ROLE_KEYS_DIR/counterparty.key.json" ]; then
+    export COUNTERPARTY_KEY_FILE="$ROLE_KEYS_DIR/counterparty.key.json"
+fi
+
 WPY="$ROOT/.venv/bin/python"; [ -x "$WPY" ] || WPY="$PY"
 NW="$ROOT/wallet/notary_wallet.py"
 

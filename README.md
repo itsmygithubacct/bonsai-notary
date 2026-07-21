@@ -28,9 +28,20 @@ three independently-versioned projects that it wires together at run time.
 
 ## Get it
 
+For a receipt-capable Bonsai-27B agent on a fresh Linux host, use the all-in-one setup:
+
 ```bash
 git clone https://github.com/itsmygithubacct/bonsai-notary.git
 cd bonsai-notary
+./scripts/setup-bonsai-27b.sh       # interactive; no blockchain broadcast by default
+```
+
+The [Bonsai-27B setup guide](docs/SETUP-BONSAI-27B.md) lists the required hardware and information,
+key or mnemonic choices, public-Third-Entry funding check, unattended flags, and post-install commands.
+
+For a manual or non-27B composition install, wire only the sibling repositories first:
+
+```bash
 ./scripts/bootstrap-deps.sh        # clone the 3 sibling repos next to this one + wire the symlinks
 ```
 
@@ -169,6 +180,7 @@ them as **git submodules** at the same paths, with nothing else to change.
 ## Docs
 
 * `docs/architecture/COMPOSED-ARCHITECTURE.md` — how the four pieces fit and where the seams are.
+* `docs/SETUP-BONSAI-27B.md` — fresh-host setup, signing keys/mnemonic, funding, and deployment.
 * `docs/BONSAI-27B.md` — the two 27B runtimes, install, resource use, receipts, and limits.
 * `INSTALL.md` — prerequisites and setup.
 * `SECURITY.md` — the security model, secret handling, and the broadcast interlock.

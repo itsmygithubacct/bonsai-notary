@@ -99,6 +99,23 @@ def test_27b_receipt_profile_wires_qwen35_artifact_and_fresh_oracle():
     assert "-n 384" in command
 
 
+def test_setup_role_keys_bind_receipt_signers_to_agent_identity(tmp_path):
+    role_dir = tmp_path / "agent" / "keys"
+    role_dir.mkdir(parents=True)
+    for role in ("elder", "agent", "counterparty"):
+        (role_dir / f"{role}.key.json").write_text("{}\n")
+
+    env = os.environ.copy()
+    env.update(BONSAI_DRYRUN="1", BONSAI_GPU="0", BONSAI_NOTARY_HOME=str(tmp_path))
+    result = subprocess.run(
+        [str(ROOT / "bonsai-notary"), "hello", "--model", "27b", "--receipts"],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"--model-key {role_dir / 'agent.key.json'}" in result.stdout
+    assert f"--counterparty-key {role_dir / 'counterparty.key.json'}" in result.stdout
+
+
 def test_27b_nonreceipt_profile_does_not_load_fresh_oracle():
     result = _dryrun("hello", "--model=27b")
     assert result.returncode == 0, result.stderr

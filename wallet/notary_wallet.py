@@ -14,8 +14,11 @@ The master mnemonic is the wallet's root secret: stored 0600 at $BONSAI_NOTARY_H
 
 Commands:
   gen-mnemonic                      generate + persist the master mnemonic (idempotent; --force to replace)
+  import-mnemonic [--file PATH]     validate + persist an existing mnemonic (hidden prompt when no file)
   address --role|--change/--index   print a derived address (role: elder|agent|counterparty)
   keyfile --role|--change/--index    write {address,wif,...} JSON to $BONSAI_NOTARY_HOME/wallet/keys/ (chain layer)
+  validate-keyfile --path FILE      validate a chain signing key and print public metadata only
+  funding-status [--need SATS]      read-only public-Third-Entry funding preflight
   balance  --address A              WhatsOnChain confirmed/unconfirmed balance
   utxos    --address A              list unspent outputs
   fanout   ...                      build (and optionally broadcast) the funding fan-out tx
@@ -25,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import getpass
 import json
 import os
 import random
@@ -136,6 +140,39 @@ def gen_mnemonic(force: bool = False) -> str:
         raise SystemExit(f"refusing to overwrite existing mnemonic at {MNEMONIC_FILE} (use --force)")
     m = mnemonic_from_entropy()                      # 128-bit entropy → 12 words (BIP39)
     _write_secret(MNEMONIC_FILE, m + "\n")           # atomic 0600 — never world-readable, even briefly
+    try:
+        os.chmod(SECRETS, 0o700)
+    except OSError:
+        pass
+    return m
+
+
+def import_mnemonic(mnemonic: str, force: bool = False) -> str:
+    """Validate and persist an operator-supplied BIP39 mnemonic without ever printing it.
+
+    Re-importing the exact same mnemonic is idempotent. Replacing a different wallet seed is
+    deliberately fail-closed unless ``force`` is explicit because doing so changes every signing
+    identity and can strand funds controlled by the prior seed.
+    """
+    m = " ".join(str(mnemonic).strip().split())
+    if not m:
+        raise SystemExit("mnemonic is empty")
+    try:
+        valid = validate_mnemonic(m)
+        if valid is False:
+            raise ValueError("checksum or word list is invalid")
+    except Exception as exc:
+        raise SystemExit(f"mnemonic failed BIP39 validation: {exc}") from exc
+
+    if MNEMONIC_FILE.exists() and not force:
+        existing = MNEMONIC_FILE.read_text(encoding="utf-8").strip()
+        if existing == m:
+            return m
+        raise SystemExit(
+            f"refusing to replace existing mnemonic at {MNEMONIC_FILE} (use --force only after backup)"
+        )
+    SECRETS.mkdir(parents=True, exist_ok=True)
+    _write_secret(MNEMONIC_FILE, m + "\n")
     try:
         os.chmod(SECRETS, 0o700)
     except OSError:
@@ -310,6 +347,44 @@ def load_keyfile(path: str) -> PrivateKey:
     return pk
 
 
+def keyfile_public_info(path: str) -> dict:
+    """Validate a chain keyfile and return only non-secret metadata safe for logs/setup output."""
+    pk = load_keyfile(path)
+    return {"address": pk.address(), "publicKeyHex": pk.public_key().hex(), "path": str(Path(path).resolve())}
+
+
+def funding_status(need_sats: int = 12_000, *, scan: int = 24,
+                   allow_unconfirmed: bool = False) -> dict:
+    """Read-only funding preflight for the public Third Entry lifecycle.
+
+    A successful result identifies a wallet-derived address that can cover ``need_sats``. A
+    failure returns the Elder receive address as the recommended funding target; no keyfile is
+    created and no transaction is built or broadcast.
+    """
+    if need_sats <= 0:
+        raise SystemExit("--need must be greater than zero")
+    try:
+        c, i, addr, sats = fund_key(need_sats, scan=scan, allow_unconfirmed=allow_unconfirmed)
+    except SystemExit as exc:
+        elder_c, elder_i = ROLES["elder"]
+        return {
+            "funded": False,
+            "needSatoshis": need_sats,
+            "allowUnconfirmed": allow_unconfirmed,
+            "depositAddress": _key(elder_c, elder_i).address(),
+            "reason": str(exc),
+        }
+    return {
+        "funded": True,
+        "needSatoshis": need_sats,
+        "allowUnconfirmed": allow_unconfirmed,
+        "address": addr,
+        "satoshis": sats,
+        "change": c,
+        "index": i,
+    }
+
+
 # ── WhatsOnChain (read-only queries + broadcast) ────────────────────────────────────────────────────────
 def woc_get(path: str):
     r = _woc_request("GET", f"{WOC}{path}")
@@ -461,6 +536,15 @@ def main(argv=None) -> int:
 
     sub.add_parser("gen-mnemonic").add_argument("--force", action="store_true")
 
+    im = sub.add_parser("import-mnemonic",
+        help="validate + persist an existing BIP39 mnemonic (hidden prompt unless --file is supplied)")
+    im.add_argument("--file", help="read the mnemonic from this file instead of prompting")
+    im.add_argument("--force", action="store_true", help="replace a different existing seed (dangerous)")
+
+    vk = sub.add_parser("validate-keyfile",
+        help="validate {wif,address} binding and print public metadata only")
+    vk.add_argument("--path", required=True)
+
     for name in ("address", "keyfile"):
         p = sub.add_parser(name)
         p.add_argument("--role", choices=sorted(ROLES))
@@ -480,6 +564,12 @@ def main(argv=None) -> int:
     fk.add_argument("--scan", type=int, default=24, help="receive/change indices to sweep (default 24)")
     fk.add_argument("--allow-unconfirmed", action="store_true", help="also count mempool (unconfirmed) balance")
     fk.add_argument("--json", action="store_true", help="emit JSON {keyfile,address,satoshis,change,index}")
+
+    fs = sub.add_parser("funding-status",
+        help="read-only public-Third-Entry preflight; exit 3 when no wallet address can cover --need")
+    fs.add_argument("--need", type=int, default=12000, help="minimum spendable satoshis required (default 12000)")
+    fs.add_argument("--scan", type=int, default=24, help="receive/change indices to sweep (default 24)")
+    fs.add_argument("--allow-unconfirmed", action="store_true", help="also count mempool balance")
 
     for name in ("balance", "utxos"):
         sub.add_parser(name).add_argument("--address", required=True)
@@ -523,6 +613,24 @@ def main(argv=None) -> int:
             print(f"[wallet]   {role:12} {BIP44_ACCOUNT}/{c}/{i} → {_key(c, i).address()}")
         return 0
 
+    if args.cmd == "import-mnemonic":
+        if args.file:
+            try:
+                supplied = Path(args.file).expanduser().read_text(encoding="utf-8")
+            except OSError as exc:
+                raise SystemExit(f"cannot read mnemonic file {args.file}: {exc}") from exc
+        else:
+            supplied = getpass.getpass("BIP39 mnemonic (input hidden): ")
+        import_mnemonic(supplied, force=args.force)
+        print(f"[wallet] mnemonic imported → {MNEMONIC_FILE} (0600; secret not shown)")
+        for role, (c, i) in ROLES.items():
+            print(f"[wallet]   {role:12} {BIP44_ACCOUNT}/{c}/{i} → {_key(c, i).address()}")
+        return 0
+
+    if args.cmd == "validate-keyfile":
+        print(json.dumps(keyfile_public_info(args.path), sort_keys=True))
+        return 0
+
     if args.cmd == "address":
         c, i = _resolve(args.role, args.change, args.index)
         print(_key(c, i).address())
@@ -551,6 +659,11 @@ def main(argv=None) -> int:
         else:
             print(p)                                   # stdout = keyfile path (for FUND_*_KEY_FILE)
         return 0
+
+    if args.cmd == "funding-status":
+        result = funding_status(args.need, scan=args.scan, allow_unconfirmed=args.allow_unconfirmed)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["funded"] else 3
 
     if args.cmd == "balance":
         print(json.dumps(woc_balance(args.address)))
