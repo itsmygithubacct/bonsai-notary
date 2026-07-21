@@ -36,6 +36,8 @@ def test_setup_help_documents_keys_funding_and_broadcast_interlock():
     assert "--public-third-entry" in result.stdout
     assert "--funding-check-only" in result.stdout
     assert "--deploy-agent" in result.stdout and "--confirm-mainnet" in result.stdout
+    assert "--python VERSION" in result.stdout
+    assert "minimum: 3.11" in result.stdout
 
 
 def test_cpu_tokenizer_plan_is_pinned_and_uses_engine_default_path(tmp_path):
@@ -60,8 +62,17 @@ def test_setup_dry_run_resolves_complete_local_plan_without_writes(tmp_path):
     assert "keys: generate" in result.stdout
     assert "Third Entry: local" in result.stdout
     assert "download+checksum" in result.stdout
+    assert "Python: 3.12 (uv-managed; downloaded if absent)" in result.stdout
     assert "blockchain broadcast: none" in result.stdout
     assert not state.exists(), "--dry-run must not create the state home"
+
+
+def test_setup_uses_supported_managed_python_and_preserves_bad_venvs():
+    script = SETUP.read_text()
+    assert 'python_spec="${BONSAI_PYTHON_VERSION:-3.12}"' in script
+    assert 'venv --managed-python --python "$python_spec"' in script
+    assert "sys.version_info >= (3, 11)" in script
+    assert 'backup_engine_venv unsupported' in script
 
 
 def test_mainnet_confirmation_cannot_be_supplied_without_deployment():
