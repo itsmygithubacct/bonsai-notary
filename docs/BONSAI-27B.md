@@ -117,6 +117,11 @@ open, force the deterministic one to CPU with `BONSAI_GPU=0`; otherwise stop the
 starting the deterministic CUDA path. The integer launcher checks the complete allocation plan before
 uploading model tensors and falls back to CPU instead of leaving a partial multi-gigabyte upload.
 
+Ordinary `--gpu` runs retain that documented fallback. Release/production gates use `--require-gpu`, which
+fails on availability, residency, architecture/memory refusal, or a runtime range guard instead. The supported
+composition gate is `scripts/accept-gpu.py`; give it `--cpu-threads N` so OpenMP and each supported BLAS runtime
+use the provider's contracted CPU cores rather than host-visible threads.
+
 Prompt prefill is currently sequential and can dominate time for long prompts. The 10.40 tokens/s figure is
 populated-cache decode throughput, not time to first token and not fresh-oracle receipt replay time.
 

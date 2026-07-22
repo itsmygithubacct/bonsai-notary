@@ -8,6 +8,13 @@ generated state and weights live under `$BONSAI_NOTARY_HOME` (default `~/.local/
 
 > The state/secrets home (`~/.local/trinote`) lives OUTSIDE this repo — never copy or ship it.
 
+The setup entry point accepts `--environment-only` for bounded installer acceptance: it resolves the immutable
+dependency composition, selects a uv-managed Python 3.12, preserves an incompatible partial venv, installs the
+pinned Python dependencies, and stops before native builds, keys, models, or blockchain operations. The
+repository runs this exact path in an Ubuntu 22.04 container whose host Python is 3.10 via
+`.github/workflows/install-acceptance.yml`; `scripts/container-install-acceptance.sh` also reruns it to prove
+idempotence. This mode is an installer/CI diagnostic, not a complete notary installation.
+
 For a fresh receipt-capable **Bonsai-27B agent**, the recommended path is the idempotent all-in-one
 installer rather than the manual steps below:
 

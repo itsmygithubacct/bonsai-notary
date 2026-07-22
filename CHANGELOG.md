@@ -6,6 +6,15 @@ C software), `bsv_third_entry/` (on-chain orchestration).
 
 ## [Unreleased]
 
+### Current changes
+
+- Pin the composed integer engine to `c1289837f6aa30935040a3b451c6d5ef031a62b0`.
+- Propagate explicit CPU entitlements across OpenMP and common BLAS runtimes.
+- Add a fail-closed GPU receipt/replay command with `receipt-run/v1` phase evidence,
+  privacy-separated recording, and checksums.
+- Add signed pending-producer/CPU-verifier handoff schemas with batch-worker hooks.
+- Add Ubuntu 22.04 dependency-environment acceptance and provider-neutral lifecycle tooling.
+
 ### Added
 - Initial composition: `bonsai-notary` wires three independently-versioned projects — the integer
   inference engine (`engine/`), the chain_c on-chain CLIs (`chain_c/`), and the on-chain orchestration

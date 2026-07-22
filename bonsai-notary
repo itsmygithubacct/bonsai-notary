@@ -12,7 +12,7 @@
 # $BONSAI_NOTARY_HOME (default ~/.local/trinote) — the SAME home the engine and chain_c both use.
 #
 # Usage:
-#   bonsai-notary [MODE] PROMPT [--model 8b|27b] [--receipts] [--onchain] [--verbose] [extra run_bonsai_cli flags...]
+#   bonsai-notary [MODE] PROMPT [--model 8b|27b] [--receipts] [--cpu-threads N] [--onchain] [--verbose] [extra run_bonsai_cli flags...]
 #   bonsai-notary [MODE] [options...] --prompt PROMPT   # explicit prompt when options come first
 #
 # MODE (default: one-shot):
@@ -23,6 +23,7 @@
 # Flags:
 #   --model MODEL   notarized model profile: 8b (default) or 27b
 #   --receipts      emit a notarized, byte-exact, third-party-verifiable receipt (OFF by default)
+#   --cpu-threads N cap OpenMP and supported BLAS runtimes to the actual CPU entitlement
 #   --onchain       anchor the receipt's Third Entry via chain_c (DRY-RUN unless --chain-confirm)
 #   --verbose       show engine/timing/receipt diagnostics (json/one-shot are output-only by default)
 #
@@ -33,6 +34,7 @@
 #   BONSAI_WEIGHTS_REPO  optional local source checkout for 8B weights (default: unset/download)
 #   BONSAI_MODEL         default model profile: 8b or 27b (default: 8b)
 #   BONSAI_CONTEXT_SIZE  context tokens for either model/backend (default: model/artifact-aware auto)
+#   BONSAI_CPU_THREADS   cap OpenMP/BLAS worker threads (default: preserve runtime defaults)
 #   BONSAI_GPU=0         force CPU (default uses the GPU producer, auto-falls back to CPU)
 #   BONSAI_DRYRUN=1      print the resolved command instead of running it
 set -euo pipefail
@@ -88,9 +90,11 @@ if [ "$mode" != "repl" ] && [ $# -gt 0 ] && [ "${1:0:1}" != "-" ]; then
     shift
 fi
 
-# --model / --receipts / --verbose / --prompt are notary-level switches;
+# --model / --receipts / --verbose / --prompt / --cpu-threads are notary-level switches;
 # everything else passes through to run_bonsai_cli.
-model="${BONSAI_MODEL:-8b}"; receipt="--no-receipt"; verbose=0; pre=()
+model="${BONSAI_MODEL:-8b}"; receipt="--no-receipt"; verbose=0
+cpu_threads="${BONSAI_CPU_THREADS:-}"; cpu_threads_requested=0; pre=()
+[ -z "${BONSAI_CPU_THREADS+x}" ] || cpu_threads_requested=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --model)
@@ -100,9 +104,16 @@ while [ $# -gt 0 ]; do
         --receipts|--receipt) receipt="--receipt"; shift ;;
         --no-receipt)         receipt="--no-receipt"; shift ;;
         --verbose|-v)         verbose=1; shift ;;
+        --cpu-threads)
+            [ $# -ge 2 ] || { echo "bonsai-notary: --cpu-threads needs a positive integer" >&2; exit 2; }
+            cpu_threads="$2"; cpu_threads_requested=1; shift 2 ;;
+        --cpu-threads=*)      cpu_threads="${1#--cpu-threads=}"; cpu_threads_requested=1; shift ;;
         --prompt|-p)
             [ "$mode" != "repl" ] || { echo "bonsai-notary: repl does not take a prompt" >&2; exit 2; }
-            [ $# -ge 2 ] && [ -n "$2" ] || { echo "bonsai-notary: $1 needs a non-empty PROMPT" >&2; exit 2; }
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                echo "bonsai-notary: $1 needs a non-empty PROMPT" >&2
+                exit 2
+            fi
             [ ${#prompt_args[@]} -eq 0 ] || { echo "bonsai-notary: PROMPT supplied more than once" >&2; exit 2; }
             prompt_args=(-p "$2"); shift 2 ;;
         --prompt=*)
@@ -113,6 +124,24 @@ while [ $# -gt 0 ]; do
         *)                    pre+=("$1"); shift ;;
     esac
 done
+if [ "$cpu_threads_requested" = 1 ]; then
+    [[ "$cpu_threads" =~ ^[1-9][0-9]*$ ]] || {
+        echo "bonsai-notary: --cpu-threads/BONSAI_CPU_THREADS must be a positive integer" >&2
+        exit 2
+    }
+    export BONSAI_CPU_THREADS="$cpu_threads"
+    # NumPy wheels and the native oracle can resolve to different BLAS runtimes
+    # across hosts. Cap every supported runtime to the same provider entitlement.
+    export OMP_NUM_THREADS="$cpu_threads"
+    export OPENBLAS_NUM_THREADS="$cpu_threads"
+    export MKL_NUM_THREADS="$cpu_threads"
+    export BLIS_NUM_THREADS="$cpu_threads"
+    export VECLIB_MAXIMUM_THREADS="$cpu_threads"
+    export NUMEXPR_NUM_THREADS="$cpu_threads"
+    export TRINOTE_ORACLE_Q1_THREADS="$cpu_threads"
+    export OMP_DYNAMIC=FALSE
+    export OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
+fi
 case "$model" in
     8b|bonsai8|bonsai-8b)     model="8b" ;;
     27b|bonsai27|bonsai-27b)  model="27b" ;;
@@ -190,7 +219,16 @@ export PYTHONPATH="$ENGINE_SRC:$BSV_TE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 if [ "${BONSAI_DRYRUN:-0}" = "1" ]; then
     note=""; [ "$quiet_stderr" = "1" ] && note=" 2>/dev/null"
     printf '[bonsai-notary] would run (cwd=%s):' "$ROOT"
-    printf ' %q' BONSAI_NOTARY_HOME="$BONSAI_NOTARY_HOME" PYTHONPATH="$PYTHONPATH" "${cmd[@]}"; printf '%s\n' "$note"
+    dry_env=(BONSAI_NOTARY_HOME="$BONSAI_NOTARY_HOME" PYTHONPATH="$PYTHONPATH")
+    if [ "$cpu_threads_requested" = 1 ]; then
+        dry_env+=(BONSAI_CPU_THREADS="$cpu_threads" OMP_NUM_THREADS="$cpu_threads"
+                 OPENBLAS_NUM_THREADS="$cpu_threads" MKL_NUM_THREADS="$cpu_threads"
+                 BLIS_NUM_THREADS="$cpu_threads" VECLIB_MAXIMUM_THREADS="$cpu_threads"
+                 NUMEXPR_NUM_THREADS="$cpu_threads" TRINOTE_ORACLE_Q1_THREADS="$cpu_threads"
+                 OMP_DYNAMIC=FALSE
+                 OMP_WAIT_POLICY="$OMP_WAIT_POLICY")
+    fi
+    printf ' %q' "${dry_env[@]}" "${cmd[@]}"; printf '%s\n' "$note"
     exit 0
 fi
 
