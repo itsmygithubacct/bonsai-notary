@@ -1,0 +1,30 @@
+name: Fresh Ubuntu 22.04 install acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/install-acceptance.yml"
+      - "dependencies.lock"
+      - "requirements*.txt"
+      - "scripts/bootstrap-deps.sh"
+      - "scripts/setup-bonsai-27b.sh"
+      - "scripts/container-install-acceptance.sh"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-environment:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    timeout-minutes: 30
+    steps:
+      - name: Install host prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git python3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Resolve pinned composition with managed Python
+        run: ./scripts/container-install-acceptance.sh

@@ -43,6 +43,7 @@ Installation controls:
   --skip-model-download       do not download the 3.80 GB pinned GGUF
   --skip-model-import         reuse an existing validated artifact; fail if absent
   --skip-tests                skip offline C/Python tests (the dry-run wiring check still runs)
+  --environment-only         resolve pinned repos + Python 3.12 dependencies, then stop (install CI)
   --jobs N                    parallel build/test jobs (default: min(CPU threads, 8))
   --dry-run                   print the resolved plan without changing the machine
   -h, --help                  show this help
@@ -73,6 +74,7 @@ skip_system_packages=0
 skip_model_download=0
 skip_model_import=0
 skip_tests=0
+environment_only=0
 dry_run=0
 jobs="${JOBS:-}"
 python_spec="${BONSAI_PYTHON_VERSION:-3.12}"
@@ -103,6 +105,7 @@ while (($#)); do
     --skip-model-download) skip_model_download=1 ;;
     --skip-model-import) skip_model_import=1 ;;
     --skip-tests) skip_tests=1 ;;
+    --environment-only) environment_only=1 ;;
     --jobs) (($# >= 2)) || die 2 "--jobs needs an integer"; jobs="$2"; shift ;;
     --dry-run) dry_run=1 ;;
     -h|--help|help) usage; exit 0 ;;
@@ -185,16 +188,26 @@ if [ "$funding_check_only" = 1 ] && [ "$public_mode" != public ]; then
 fi
 
 if [ "$dry_run" = 1 ]; then
+  if [ "$environment_only" = 1 ]; then
+    gguf_plan='not run'
+    artifact_plan='not run'
+    tests_plan='dependency resolver only'
+  else
+    if [ "$skip_model_download" = 1 ]; then gguf_plan=skip; else gguf_plan=download+checksum; fi
+    if [ "$skip_model_import" = 1 ]; then artifact_plan=skip; else artifact_plan=import; fi
+    if [ "$skip_tests" = 1 ]; then tests_plan=skip; else tests_plan='offline suites'; fi
+  fi
   say "Resolved setup plan (dry run)"
   info "repository: $ROOT"
   info "state home: $notary_home"
-  info "keys: $key_mode"
+  info "keys: $([ "$environment_only" = 1 ] && echo 'not provisioned (environment-only)' || echo "$key_mode")"
   info "Third Entry: $public_mode"
   info "system packages: $([ "$skip_system_packages" = 1 ] && echo skip || echo install/verify)"
   info "Python: $python_spec (uv-managed; downloaded if absent)"
-  info "model GGUF: $([ "$skip_model_download" = 1 ] && echo skip || echo download+checksum)"
-  info "integer artifact: $([ "$skip_model_import" = 1 ] && echo skip || echo import)"
-  info "tests: $([ "$skip_tests" = 1 ] && echo skip || echo offline suites)"
+  info "model GGUF: $gguf_plan"
+  info "integer artifact: $artifact_plan"
+  info "tests: $tests_plan"
+  info "scope: $([ "$environment_only" = 1 ] && echo 'dependency environment only' || echo 'complete notary')"
   info "blockchain broadcast: $([ "$deploy_agent" = 1 ] && [ "$confirm_mainnet" = 1 ] && echo 'one AgentTea deploy' || echo none)"
   exit 0
 fi
@@ -260,12 +273,18 @@ engine_venv="$ROOT/engine/bonsai/.venv"
 engine_py="$engine_venv/bin/python"
 
 backup_engine_venv() {
-  local reason="$1" version backup suffix=0
+  local reason="$1" version backup backup_dir suffix=0
   version="$($engine_py -c 'import platform; print(platform.python_version())' 2>/dev/null || printf unknown)"
-  backup="$engine_venv.$reason-python-$version"
+  # Preserve incompatible environments outside the immutable dependency
+  # checkout; leaving a renamed venv beside source makes the next bootstrap
+  # correctly reject that dependency as dirty.
+  backup_dir="$notary_home/setup/venv-backups"
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  backup="$backup_dir/engine.$reason-python-$version"
   while [ -e "$backup" ] || [ -L "$backup" ]; do
     suffix=$((suffix + 1))
-    backup="$engine_venv.$reason-python-$version.$suffix"
+    backup="$backup_dir/engine.$reason-python-$version.$suffix"
   done
   mv "$engine_venv" "$backup"
   warn "preserved incompatible engine environment at $backup"
@@ -427,6 +446,26 @@ finally:
             pass
 PY
 }
+
+# A bounded fresh-container contract for the dependency layer. This executes the
+# exact bootstrap, uv selection, venv preservation, and pinned resolver path used
+# by the full installer, then stops before compilers, keys, weights, or networks
+# other than public source/package downloads are involved.
+if [ "$environment_only" = 1 ]; then
+  [ "$funding_check_only" = 0 ] || die 2 "--environment-only conflicts with --funding-check-only"
+  [ "$deploy_agent" = 0 ] || die 2 "--environment-only conflicts with --deploy-agent"
+  install_system_dependencies
+  install_uv
+  say "Cloning/wiring the three dependency repositories"
+  "$ROOT/scripts/bootstrap-deps.sh"
+  say "Creating the deterministic inference dependency environment"
+  ensure_engine_environment
+  "$uv_bin" pip install --python "$engine_py" \
+    -r "$ROOT/requirements_notary.txt" -r "$ROOT/requirements_wallet.txt" -r "$ROOT/requirements_test.txt"
+  say "Dependency environment acceptance complete"
+  info "engine Python: $($engine_py -c 'import platform; print(platform.python_version())')"
+  exit 0
+fi
 
 if [ "$funding_check_only" = 1 ]; then
   [ -x "$engine_py" ] || die 2 "existing engine environment not found: $engine_py"

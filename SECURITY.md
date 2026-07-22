@@ -226,7 +226,36 @@ time. For higher-value operation, isolate the key so it is never extractable:
 
 ---
 
-## 5. Responsible disclosure
+## 5. Acceptance evidence and cloud operations
+
+`scripts/accept-gpu.py` never enables `--onchain` and records no prompt text or key path in its structured
+manifest. With `--record-dir`, raw command output is mode-0700/private and is excluded from `SHA256SUMS`;
+sanitized logs, the portable bundle, pinned replay result, and `manifest.json` occupy separate public
+namespaces. Publication redacts private paths, WIFs, private-key/mnemonic fields, bearer/OAuth tokens, signed
+URLs, and provider SSH endpoints, then fails if those patterns remain. Raw evidence can still contain private
+host facts and must never be published without an independent review.
+
+The provider-neutral lifecycle controller in `operations/` has no bundled provider adapter or credential.
+Read-only planning cannot create a rental. Creation requires both `--authorize-billing` and an exact repetition
+of the descriptor's storage-inclusive hourly ceiling. A 256-bit idempotency token is durably recorded before
+the adapter receives create; timeout or malformed output must be resolved by the adapter's lookup-only
+`reconcile` operation before the controller proceeds. Unresolved tokens block another create. Every adapter
+operation is time-bounded, error/signal cleanup reconciles then destroys recorded IDs, and successful teardown
+requires a separate account-wide zero-active audit. Merely adding or testing this tooling does not authorize a
+rental.
+
+GPU acceptance also fails unless the notary, engine, chain adapter, and third-entry trees are clean and all
+dependency commits match `dependencies.lock`. Failed-run evidence never labels dirty bytes with `HEAD`: it
+records no source revision for that tree and identifies the commit only as its non-representative base.
+
+Producer/verifier handoff files use different schemas for different trust states. A producer can emit only
+`receipt-pending/v1` with `PENDING / UNVERIFIED`. `receipt-verified-handoff/v1` is created only after the
+response signature verifies against an explicitly pinned verifier public key and every candidate passes full,
+unsampled, signer-pinned replay. UI code must never render the pending schema with a `VERIFIED` badge.
+
+---
+
+## 6. Responsible disclosure
 
 If you discover a security vulnerability — especially anything that could move
 funds, leak a key/mnemonic, forge a receipt, or bypass the two-key broadcast

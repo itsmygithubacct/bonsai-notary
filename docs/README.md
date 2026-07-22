@@ -27,6 +27,9 @@
 - [`receipts/THIRD-ENTRY.md`](receipts/THIRD-ENTRY.md) — the triple-entry (Third Entry) design + worked
   mainnet examples. (In the composed system the Third Entry is published by chain_c via `bsv_third_entry`.)
 - [`receipts/RECEIPT-BUNDLE.md`](receipts/RECEIPT-BUNDLE.md) — packaging/verifying portable bundles.
+- [`operations/GPU-ACCEPTANCE.md`](operations/GPU-ACCEPTANCE.md) — fail-closed GPU receipt/replay gate,
+  evidence layout, and producer/verifier separation.
+- [`../operations/README.md`](../operations/README.md) — provider-neutral, state-first node lifecycle protocol.
 
 ## Inherited engine reference (authoritative home: `engine/`)
 

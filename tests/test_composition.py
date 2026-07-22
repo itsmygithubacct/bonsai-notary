@@ -99,6 +99,37 @@ def test_27b_receipt_profile_wires_qwen35_artifact_and_fresh_oracle():
     assert "-n 384" in command
 
 
+def test_cpu_thread_entitlement_caps_openmp_and_all_supported_blas_runtimes():
+    result = _dryrun("hello", "--model", "27b", "--cpu-threads", "20")
+    assert result.returncode == 0, result.stderr
+    for name in (
+        "BONSAI_CPU_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS", "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "TRINOTE_ORACLE_Q1_THREADS",
+    ):
+        assert f"{name}=20" in result.stdout
+    assert "OMP_DYNAMIC=FALSE" in result.stdout
+
+
+def test_cpu_thread_entitlement_can_come_from_environment():
+    env = os.environ.copy()
+    env.update(BONSAI_DRYRUN="1", BONSAI_GPU="0", BONSAI_CPU_THREADS="4")
+    result = subprocess.run(
+        [str(ROOT / "bonsai-notary"), "hello"], cwd=ROOT, env=env,
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "OMP_NUM_THREADS=4" in result.stdout
+    assert "OPENBLAS_NUM_THREADS=4" in result.stdout
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "many", ""])
+def test_invalid_cpu_thread_entitlement_fails_before_inference(value):
+    result = _dryrun("hello", f"--cpu-threads={value}")
+    assert result.returncode == 2
+    assert "positive integer" in result.stderr
+
+
 def test_setup_role_keys_bind_receipt_signers_to_agent_identity(tmp_path):
     role_dir = tmp_path / "agent" / "keys"
     role_dir.mkdir(parents=True)
@@ -169,3 +200,8 @@ def test_empty_prompt_is_rejected(args):
     result = _dryrun(*args)
     assert result.returncode == 2
     assert "non-empty PROMPT" in result.stderr
+
+
+def test_composition_pins_grouped_projection_engine_release():
+    lock = (ROOT / "dependencies.lock").read_text()
+    assert "integer_inference_engine 8384c76f78a074b1a47c15d90f05a701cc2c1a14" in lock

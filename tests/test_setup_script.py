@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "scripts" / "setup-bonsai-27b.sh"
 TOKENIZER_SETUP = ROOT / "scripts" / "install-llama-tokenizer.sh"
 BOOTSTRAP = ROOT / "scripts" / "bootstrap-deps.sh"
+CONTAINER_ACCEPTANCE = ROOT / "scripts" / "container-install-acceptance.sh"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -18,7 +19,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_setup_script_is_valid_bash():
-    for script in (SETUP, TOKENIZER_SETUP, BOOTSTRAP):
+    for script in (SETUP, TOKENIZER_SETUP, BOOTSTRAP, CONTAINER_ACCEPTANCE):
         result = subprocess.run(["bash", "-n", str(script)], text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
 
@@ -39,6 +40,7 @@ def test_setup_help_documents_keys_funding_and_broadcast_interlock():
     assert "--deploy-agent" in result.stdout and "--confirm-mainnet" in result.stdout
     assert "--python VERSION" in result.stdout
     assert "minimum: 3.11" in result.stdout
+    assert "--environment-only" in result.stdout
 
 
 def test_cpu_tokenizer_plan_is_pinned_and_uses_engine_default_path(tmp_path):
@@ -66,6 +68,29 @@ def test_setup_dry_run_resolves_complete_local_plan_without_writes(tmp_path):
     assert "Python: 3.12 (uv-managed; downloaded if absent)" in result.stdout
     assert "blockchain broadcast: none" in result.stdout
     assert not state.exists(), "--dry-run must not create the state home"
+
+
+def test_environment_only_dry_run_is_explicit_and_non_mutating(tmp_path):
+    state = tmp_path / "state-that-must-not-exist"
+    result = _run(
+        "--dry-run", "--yes", "--local-only", "--environment-only",
+        "--notary-home", str(state),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "scope: dependency environment only" in result.stdout
+    assert "blockchain broadcast: none" in result.stdout
+    assert not state.exists()
+
+
+def test_fresh_container_workflow_runs_real_environment_contract():
+    workflow = (ROOT / ".github" / "workflows" / "install-acceptance.yml").read_text()
+    assert "container: ubuntu:22.04" in workflow
+    assert "./scripts/container-install-acceptance.sh" in workflow
+    script = CONTAINER_ACCEPTANCE.read_text()
+    assert "host Python <=3.10" in script
+    assert "--environment-only" in script
+    assert "setup/venv-backups" in script
+    assert "engine.incomplete-python-*" in script
 
 
 def test_setup_uses_supported_managed_python_and_preserves_bad_venvs():

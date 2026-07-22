@@ -1,5 +1,5 @@
 # Tested immutable dependency composition. Update these full commit IDs only
 # after the corresponding repositories pass their complete test suites.
-integer_inference_engine d00a9a7adfbf0a8af8791c5fa76ae9b6164d8c36
+integer_inference_engine 8384c76f78a074b1a47c15d90f05a701cc2c1a14
 chain_c 30e56c95d92ae952d16197ff8dfd15a8af04783d
 bsv_third_entry dea5d5125d1ca340e2bb6795d46667b370765f7a

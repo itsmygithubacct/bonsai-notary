@@ -1,0 +1,24 @@
+{
+  "adapterTimeoutSeconds": 30,
+  "image": "provider/image:immutable-tag",
+  "label": "bonsai-gpu-acceptance",
+  "limits": {
+    "baseHourlyUsd": 0.2,
+    "maxAttempts": 3,
+    "storageHourlyUsd": 0.02,
+    "totalHourlyUsd": 0.22
+  },
+  "pollSeconds": 5,
+  "provider": "adapter-defined-provider",
+  "requirements": {
+    "computeCapability": "8.6",
+    "gpu": "RTX 3090",
+    "minCpuCores": 20,
+    "minGpuRamGb": 12,
+    "minRamGb": 24,
+    "os": "ubuntu-22.04"
+  },
+  "schema": "provider-node/v1",
+  "sshTimeoutSeconds": 600,
+  "storageGb": 40
+}

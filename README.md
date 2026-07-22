@@ -92,6 +92,10 @@ into `$BONSAI_NOTARY_HOME/models`, or reuses a verified local checkout via `BONS
 ./scripts/bonsai.sh onchain   "Notarize this."                          # dry-run unless --chain-confirm
 ./scripts/bonsai.sh repl
 
+# fail-closed release gate (no chain broadcast; use contracted, not host-visible, CPU cores)
+./scripts/accept-gpu.py --cpu-threads 20 \
+  --record-dir "$BONSAI_NOTARY_HOME/acceptance/run-001"
+
 # resumable on-chain agent identity (driven through chain_c/build/agentd)
 ./bonsai-agent status
 ./bonsai-agent deploy --ricardian-hash <64hex>                          # DRY-RUN unless --confirm
@@ -169,6 +173,7 @@ On-chain broadcasts are **DRY-RUN by default**. A real spend needs **both** `--c
 | `BONSAI_MODELS_DIR` | weights location (in the state home) | `$BONSAI_NOTARY_HOME/models` |
 | `BONSAI_MODEL` | default notary model profile (`8b` or `27b`) | `8b` |
 | `BONSAI_CONTEXT_SIZE` | context tokens for either native profile (`auto` also accepted) | model/artifact-aware auto |
+| `BONSAI_CPU_THREADS` | cap OpenMP and common BLAS runtimes to the actual CPU entitlement | runtime default |
 | `BONSAI_WEIGHTS_REPO` | opt-in local checkout `scripts/fetch_weights.sh` reuses weights from | unset (download) |
 | `BONSAI_GPU` | `1` use GPU producer, `0` force CPU | `1` |
 | `BONSAI_DRYRUN` | print the resolved command, don't run | `0` |
@@ -185,6 +190,8 @@ them as **git submodules** at the same paths, with nothing else to change.
 ## Docs
 
 * `docs/architecture/COMPOSED-ARCHITECTURE.md` — how the four pieces fit and where the seams are.
+* `docs/operations/GPU-ACCEPTANCE.md` — fail-closed CUDA receipt/replay acceptance and evidence.
+* `operations/README.md` — provider-neutral, state-first acceptance-node lifecycle protocol.
 * `docs/SETUP-BONSAI-27B.md` — fresh-host setup, signing keys/mnemonic, funding, and deployment.
 * `docs/BONSAI-27B.md` — the two 27B runtimes, install, resource use, receipts, and limits.
 * `INSTALL.md` — prerequisites and setup.

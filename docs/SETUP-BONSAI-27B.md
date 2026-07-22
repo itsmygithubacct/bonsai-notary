@@ -203,10 +203,20 @@ under `$BONSAI_NOTARY_HOME`. The three dependency source checkouts sit next to `
 ./scripts/setup-bonsai-27b.sh --dry-run --yes --key-mode generate --local-only
 ```
 
+Installer CI can stop after immutable dependency resolution and the managed Python dependency layer:
+
+```bash
+./scripts/setup-bonsai-27b.sh --yes --local-only --skip-system-packages --environment-only
+```
+
+This is the real Ubuntu 22.04 container acceptance path. It deliberately does not build kernels, provision
+keys, fetch models, or contact a blockchain, and therefore is not a complete installation.
+
 - **No NVIDIA/CUDA:** expected; setup reports CPU-only mode. Local receipts remain valid.
 - **Custom Python:** pass `--python 3.11` (or set `BONSAI_PYTHON_VERSION`) to override the default 3.12.
   Python older than 3.11 is rejected before dependency installation. A partial venv created by an older
-  setup is moved aside with an `.unsupported-python-*` suffix instead of being deleted.
+  setup is moved into `$BONSAI_NOTARY_HOME/setup/venv-backups/` instead of being deleted or leaving the
+  immutable engine checkout dirty.
 - **Insufficient disk:** free at least 16 GB under the state-home filesystem and rerun. Downloads resume.
 - **Funding check API error:** this is different from zero funds and exits with an API/network error. Retry
   when WhatsOnChain is reachable; no broadcast is attempted.
@@ -217,5 +227,8 @@ under `$BONSAI_NOTARY_HOME`. The three dependency source checkouts sit next to `
   verified backup, or select a different `--notary-home`.
 - **Custom state location:** pass `--notary-home /private/path` on every setup run and export the same
   `BONSAI_NOTARY_HOME` when launching later.
+- **Release GPU acceptance:** after a complete install, run `scripts/accept-gpu.py --cpu-threads N`, where
+  `N` is the actual CPU entitlement. Add `--record-dir` for the privacy-separated evidence bundle described
+  in [`operations/GPU-ACCEPTANCE.md`](operations/GPU-ACCEPTANCE.md).
 - **Manual prerequisites:** use `--skip-system-packages` after installing the packages listed in
   [`INSTALL.md`](../INSTALL.md).

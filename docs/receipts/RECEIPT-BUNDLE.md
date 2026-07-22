@@ -155,3 +155,53 @@ machine consumers. The offline + on-chain layers need only the Python standard l
 WhatsOnChain fetch); `--reexec` is the only layer that loads the model. The loader selects the Qwen3 or
 Qwen3.5 integer graph from the artifact metadata. Add `--oracle` to force the slow pure-NumPy path; the
 default native re-execution accelerator is required to remain byte-identical.
+
+## Asynchronous producer/verifier handoff
+
+Long CPU replay need not keep a GPU producer allocated. The composition CLI can package one or more candidate
+bundles under a trust-state-specific pending request:
+
+```bash
+./scripts/receipt-handoff.py prepare \
+  --bundle bonsai-a.tar.gz --bundle bonsai-b.tar.gz \
+  --model-pubkey <pinned-model-pubkey> --counterparty-pubkey <pinned-counterparty-pubkey> \
+  --batch-id batch-001 --out-dir /protected/handoff
+```
+
+`/protected/handoff/pending.json` is `receipt-pending/v1` and is labeled exactly `PENDING / UNVERIFIED`.
+It is not a receipt verification result and must not be presented as one. Its content-addressed bundle copies
+can be transferred to separately provisioned CPU verifier workers. A worker performs full replay and signs the
+ordered batch response with its verifier identity:
+
+```bash
+./scripts/receipt-handoff.py verify \
+  --request /protected/handoff/pending.json \
+  --artifact "$BONSAI_NOTARY_HOME/models/Bonsai-27B-Q1_0-int-qwen35.safetensors" \
+  --signing-key /protected/verifier.key.json --cpu-threads 20 --out-dir /protected/response
+```
+
+The worker also accepts `--verifier-policy policy.json`; the engine rejects a policy bound to another artifact
+or CPU-thread setting, and generated policies reject token-count pairs absent from their measured matrix. The
+signed response records the actual exact replay strategy.
+
+One worker batches all candidates through one model load by default. `--jobs N` is an optional independent
+shard hook for hosts with enough RAM; total CPU demand is `jobs × cpu-threads`, while response order remains
+bound to the request. Each verifier subprocess has a hard one-hour deadline by default; set
+`--worker-timeout-seconds` explicitly for another bounded operating envelope. The response signs each
+transport digest, bundle hash, route, and verdict. A timeout, rejected, or sampled replay is signed as
+`REJECTED`, never upgraded.
+
+The producer (or a release service) pins the verifier identity and finalizes only the signed pass:
+
+```bash
+./scripts/receipt-handoff.py finalize \
+  --request /protected/handoff/pending.json \
+  --response /protected/response/verifier-response.json \
+  --verifier-pubkey <pinned-verifier-pubkey> --out /protected/verified.json
+```
+
+Finalization checks the response signature, request ID, batch ordering, every bundle digest, and strict replay
+flags before emitting `receipt-verified-handoff/v1` with the `VERIFIED` label. A boolean saying pins were
+supplied is insufficient: both model and counterparty signatures must be present, valid, and authenticated by
+their independently supplied public-key pins in the engine's raw verification result. This final envelope references
+the original immutable bundles; it does not mutate them or weaken their normal offline/re-execution checks.
