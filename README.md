@@ -28,7 +28,7 @@ three independently-versioned projects that it wires together at run time.
 
 ## Watch the series
 
-[![Trinote: From Deterministic Inference to Durable Evidence](docs/media/trinote-series-poster.png)](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/trinote-series-complete.mp4)
+https://github.com/user-attachments/assets/e63856d4-4594-4a33-97c8-943739cd42bb
 
 **[Trinote: From Deterministic Inference to Durable Evidence](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/trinote-series-complete.mp4)**
 — a six-part technical series that walks the whole evidence path across all four composed projects
@@ -48,6 +48,14 @@ stays small). `bonsai-notary` is part five.
 Each part title links its episode video (5.5–8.4 MB each). Parts two–four are hosted as
 media releases on their own repositories; parts one, five, and six live on this repo's
 [media release](https://github.com/itsmygithubacct/bonsai-notary/releases/tag/media-v1).
+
+**Part five — this repo's episode:**
+
+https://github.com/user-attachments/assets/a2be3628-b6cb-48fa-af19-021f77af169d
+
+**Part six — the complete trust path:**
+
+https://github.com/user-attachments/assets/afd9f6ff-5ae8-45af-a3a4-97d8d5f0e746
 ## Get it
 
 For a receipt-capable Bonsai-27B agent on a fresh Linux host, use the all-in-one setup:
