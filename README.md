@@ -28,6 +28,8 @@ three independently-versioned projects that it wires together at run time.
 
 ## Watch the series
 
+[![Trinote: From Deterministic Inference to Durable Evidence](docs/media/trinote-series-poster.png)](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/trinote-series-complete.mp4)
+
 **[Trinote: From Deterministic Inference to Durable Evidence](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/trinote-series-complete.mp4)**
 — a six-part technical series that walks the whole evidence path across all four composed projects
 (1920×1080, 16m28s, 47 MB; published as a
