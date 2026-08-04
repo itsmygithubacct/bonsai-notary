@@ -47,6 +47,9 @@ FULL_REPLAY = "full-unsampled"
 
 SUBMIT_DOMAIN = "semantos.trinote.verification.submit/v1"
 RESULT_DOMAIN = "semantos.trinote.verification.result/v1"
+#: operator-local diagnostic, never a semantos wire object and never written to
+#: results: a replay that could not be carried out is not a verdict
+OPERATIONAL_FAILURE_DOMAIN = "trinote.verifier.operational-failure/v1"
 
 SUBMIT_FIELDS = frozenset((
     "domain", "protocolVersion", "receiptHash", "encryptedBundleHash",
@@ -243,7 +246,16 @@ def run_once(root: Path, verifier: Verifier, *, now: int,
             # a refusal is not a verdict: the control plane keeps waiting rather
             # than recording a failed verification that never ran
             continue
-        except Exception:                                        # noqa: BLE001
+        except Exception as exc:                                 # noqa: BLE001
+            # The replay could not be carried out. That is not a verdict either — a
+            # crashed replay must never reach semantos as "fail" — so nothing is
+            # written. But unlike a refusal it is this operator's problem, so it is
+            # returned instead of discarded: a verifier that silently produces
+            # nothing is indistinguishable from one with an empty queue, which is
+            # how a broken replay stays broken for as long as nobody looks.
+            # Only the exception type is carried; a message could hold a path.
+            outcomes.append({"domain": OPERATIONAL_FAILURE_DOMAIN, "source": path.name,
+                             "failure": type(exc).__name__, "checkedAt": tick()})
             continue
         write_result(root, result, env)
         outcomes.append(result)
