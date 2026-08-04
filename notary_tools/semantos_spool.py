@@ -39,6 +39,9 @@ MAX_ENCODED_BYTES = 65536
 
 SUBMIT_DOMAIN = "semantos.trinote.job.submit/v1"
 STATE_DOMAIN = "semantos.trinote.job.state/v1"
+#: worker-local diagnostic, never a semantos wire object: emitted for a job so
+#: malformed that no state file can be named for it
+UNREPORTABLE_DOMAIN = "trinote.worker.unreportable/v1"
 
 #: monotonic order; index comparison is the whole rule
 STATE_ORDER = ("accepted", "running", "awaiting-signature", "complete")
@@ -145,12 +148,16 @@ class Spool:
     def states_dir(self) -> Path:
         return self.root / "states"
 
-    def collect(self, now: int | None = None) -> Iterator[tuple[dict, JobRejected | None]]:
-        """Yield `(job, rejection)` for every queued job, oldest name first.
+    def collect(self, now: int | None = None) -> Iterator[tuple[dict, JobRejected | None, Path]]:
+        """Yield `(job, rejection, path)` for every queued job, oldest name first.
 
         A malformed job is yielded with its rejection rather than skipped: it still
         needs a `failed` state written, or the control plane waits forever for a
         job this worker silently discarded.
+
+        The source path is yielded with it because a malformed job may be malformed
+        in its `idempotencyKey`, and then the filename the control plane chose is the
+        only identity left to report a failure against.
         """
         if not self.jobs_dir.is_dir():
             return
@@ -158,12 +165,12 @@ class Spool:
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
-                yield {"idempotencyKey": path.stem}, JobRejected("unreadable", str(exc))
+                yield {}, JobRejected("unreadable", str(exc)), path
                 continue
             try:
-                yield validate_job(job, now), None
+                yield validate_job(job, now), None, path
             except JobRejected as exc:
-                yield job if isinstance(job, dict) else {"idempotencyKey": path.stem}, exc
+                yield job if isinstance(job, dict) else {}, exc, path
 
     def current_state(self, idempotency_key: str) -> dict | None:
         path = self.states_dir / f"{idempotency_key}.json"
@@ -171,6 +178,61 @@ class Spool:
             return json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
+
+    def _record(self, idempotency_key: str, state: str, *, attempt: int, updated_at: int,
+                receipt_hash: str | None = None, encrypted_bundle_hash: str | None = None,
+                failure_code: str | None = None) -> dict:
+        return {
+            "domain": STATE_DOMAIN,
+            "protocolVersion": PROTOCOL_VERSION,
+            "idempotencyKey": idempotency_key,
+            "state": state,
+            "attempt": attempt,
+            "updatedAt": updated_at,
+            "receiptHash": receipt_hash,
+            "encryptedBundleHash": encrypted_bundle_hash,
+            "failureCode": failure_code,
+        }
+
+    def _publish(self, record: dict, target: Path, *, exclusive: bool) -> bool:
+        """Write one state through a same-directory temp file, so semantos never
+        reads a half-written state.
+
+        `exclusive` publishes with a hard link, which fails when the target already
+        exists. That makes taking a job atomic against another worker, where a read
+        followed by a write leaves a window between the two.
+        """
+        self.states_dir.mkdir(parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(dir=self.states_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(record, handle, sort_keys=True, separators=(",", ":"))
+                handle.write("\n")
+            os.chmod(temp, 0o600)
+            if not exclusive:
+                os.replace(temp, target)      # atomic: no half-written state is ever read
+                return True
+            try:
+                os.link(temp, target)         # atomic AND refuses an existing target
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+
+    def claim(self, idempotency_key: str, *, attempt: int, updated_at: int) -> dict | None:
+        """Take a job by publishing its first state, or return None if another worker
+        already holds it.
+
+        Checking `current_state` and then writing would let two workers both observe
+        nothing and both proceed; the loser then fails its own monotonic check and
+        raises, abandoning every job still left in its batch.
+        """
+        _check_hex(idempotency_key, "idempotencyKey")
+        record = self._record(idempotency_key, "accepted", attempt=attempt, updated_at=updated_at)
+        target = self.states_dir / f"{idempotency_key}.json"
+        return record if self._publish(record, target, exclusive=True) else None
 
     def report(self, idempotency_key: str, state: str, *, attempt: int, updated_at: int,
                receipt_hash: str | None = None, encrypted_bundle_hash: str | None = None,
@@ -189,17 +251,10 @@ class Spool:
                 if STATE_ORDER.index(state) <= STATE_ORDER.index(old):
                     raise JobRejected("not-monotonic", f"{old} -> {state}")
 
-        record = {
-            "domain": STATE_DOMAIN,
-            "protocolVersion": PROTOCOL_VERSION,
-            "idempotencyKey": idempotency_key,
-            "state": state,
-            "attempt": attempt,
-            "updatedAt": updated_at,
-            "receiptHash": receipt_hash,
-            "encryptedBundleHash": encrypted_bundle_hash,
-            "failureCode": failure_code,
-        }
+        record = self._record(idempotency_key, state, attempt=attempt, updated_at=updated_at,
+                              receipt_hash=receipt_hash,
+                              encrypted_bundle_hash=encrypted_bundle_hash,
+                              failure_code=failure_code)
 
         # coherence, checked here so a malformed state never reaches the control
         # plane: completion means a receipt, failure means a code, and neither
@@ -215,19 +270,22 @@ class Spool:
         if state not in TERMINAL and (receipt_hash or encrypted_bundle_hash):
             raise JobRejected("state-mismatch", f"{state} cannot carry result hashes")
 
-        self.states_dir.mkdir(parents=True, exist_ok=True)
-        target = self.states_dir / f"{idempotency_key}.json"
-        fd, temp = tempfile.mkstemp(dir=self.states_dir, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(record, handle, sort_keys=True, separators=(",", ":"))
-                handle.write("\n")
-            os.chmod(temp, 0o600)
-            os.replace(temp, target)          # atomic: no half-written state is ever read
-        except BaseException:
-            os.unlink(temp)
-            raise
+        self._publish(record, self.states_dir / f"{idempotency_key}.json", exclusive=False)
         return record
+
+
+def _reporting_key(job: dict, path: Path) -> str | None:
+    """The identity a failure can be reported against.
+
+    The job's own `idempotencyKey` when it has a usable one, otherwise the filename
+    the control plane chose, which is the handle it already holds for this job. A job
+    rejected *for* its key would otherwise get no state written at all — the silent
+    discard this module exists to prevent.
+    """
+    for candidate in (job.get("idempotencyKey"), path.stem):
+        if isinstance(candidate, str) and _HEX64.match(candidate):
+            return candidate
+    return None
 
 
 def run_once(spool: Spool, execute: Executor, *, now: int,
@@ -236,26 +294,35 @@ def run_once(spool: Spool, execute: Executor, *, now: int,
 
     Returns the final state record per job. An executor that raises produces a
     `failed` state with a bounded code — never a result, and never a silent retry.
+
+    A job that nothing can name yields an `UNREPORTABLE_DOMAIN` record in the returned
+    list rather than a state file. That is the one case where no state can be written
+    for semantos to read, so it is surfaced to this worker's own caller instead of
+    dropped, because a drop is indistinguishable from a job that was never queued.
     """
     tick = clock or (lambda: now)
     outcomes: list[dict] = []
 
-    for job, rejection in spool.collect(now):
-        key = job.get("idempotencyKey", "")
+    for job, rejection, path in spool.collect(now):
+        key = _reporting_key(job, path)
+
         if rejection is not None:
+            if key is None:
+                outcomes.append({"domain": UNREPORTABLE_DOMAIN, "source": path.name,
+                                 "failureCode": rejection.code, "updatedAt": tick()})
+                continue
             try:
                 outcomes.append(spool.report(key, "failed", attempt=1, updated_at=tick(),
                                              failure_code=rejection.code))
             except JobRejected:
-                # already terminal, or a key too malformed to name a state file:
-                # nothing to report against, and nothing to retry
+                # a terminal state already exists: this is a duplicate delivery of
+                # something already resolved, so nothing is lost by not rewriting it
                 pass
             continue
 
-        if spool.current_state(key) is not None:
-            continue                          # already claimed; exactly-once, not at-least-once
-
-        spool.report(key, "accepted", attempt=1, updated_at=tick())
+        claimed = spool.claim(key, attempt=1, updated_at=tick())
+        if claimed is None:
+            continue                          # another worker holds it; exactly-once
         spool.report(key, "running", attempt=1, updated_at=tick())
         try:
             receipt_hash, bundle_hash = execute(job)

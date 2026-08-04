@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notary_tools.semantos_spool import (  # noqa: E402
+    UNREPORTABLE_DOMAIN,
     JobRejected,
     Spool,
     run_once,
@@ -185,3 +186,71 @@ def test_an_unconfigured_queue_refuses_rather_than_defaulting():
     with pytest.raises(JobRejected) as excinfo:
         Spool.from_env({})
     assert excinfo.value.code == "queue-unconfigured"
+
+
+# ── nothing is discarded without a trace ──────────────────────────────────────
+
+def test_a_job_rejected_for_its_own_key_is_still_reported(spool):
+    """The rejection and the thing needed to report it were the same field.
+
+    Reporting against the job's `idempotencyKey` cannot work when that key is what
+    the job is being rejected for, so the filename the control plane chose is used
+    instead. Without it this job gets no state at all and the control plane waits
+    on it forever.
+    """
+    keyless = job()
+    del keyless["idempotencyKey"]
+    (spool.jobs_dir / f"{'a1' * 32}.json").write_text(json.dumps(keyless), encoding="utf-8")
+
+    run_once(spool, ok_executor, now=NOW)
+
+    state = spool.current_state("a1" * 32)
+    assert state is not None, "a queued job produced no state at all"
+    assert state["state"] == "failed"
+    assert state["failureCode"] == "missing-field"
+
+
+def test_a_job_nothing_can_name_is_surfaced_rather_than_dropped(spool):
+    """When neither the job nor its filename can name a state file there is nothing
+    to write, so it is returned to this worker's caller. A silent drop is
+    indistinguishable from a job that was never queued."""
+    (spool.jobs_dir / "not-a-key.json").write_text("{not json", encoding="utf-8")
+
+    outcomes = run_once(spool, ok_executor, now=NOW)
+
+    assert [o["domain"] for o in outcomes] == [UNREPORTABLE_DOMAIN]
+    assert outcomes[0]["source"] == "not-a-key.json"
+    assert outcomes[0]["failureCode"] == "unreadable"
+
+
+# ── claiming is atomic, not read-then-write ───────────────────────────────────
+
+def test_only_one_worker_can_claim_a_job(spool):
+    a, b = Spool(spool.root), Spool(spool.root)
+    assert a.claim("a1" * 32, attempt=1, updated_at=NOW) is not None
+    assert b.claim("a1" * 32, attempt=1, updated_at=NOW) is None
+
+
+def test_a_lost_claim_does_not_abandon_the_rest_of_the_batch(spool):
+    """Two workers observing an unclaimed job both proceeded, and the loser raised
+    out of run_once — taking every job still queued behind it down too."""
+    first, second = "a1" * 32, "b2" * 32
+    queue(spool, job())
+    queue(spool, job(idempotencyKey=second))
+
+    other = Spool(spool.root)
+    other.claim(first, attempt=1, updated_at=NOW)      # another worker got there first
+
+    executed = []
+    outcomes = run_once(spool, lambda j: executed.append(j["idempotencyKey"]) or (RECEIPT, BUNDLE),
+                        now=NOW)
+
+    assert executed == [second], "the job behind the contended one was skipped"
+    assert [o["state"] for o in outcomes] == ["complete"]
+
+
+def test_a_claim_publishes_a_whole_state_and_leaves_no_debris(spool):
+    spool.claim("a1" * 32, attempt=1, updated_at=NOW)
+    names = sorted(p.name for p in spool.states_dir.iterdir())
+    assert names == [f"{'a1' * 32}.json"]
+    assert spool.current_state("a1" * 32)["state"] == "accepted"
