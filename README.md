@@ -38,13 +38,16 @@ stays small). `bonsai-notary` is part five.
 
 | # | Part | Covers |
 |---|---|---|
-| 01 | The Four-Part Evidence System | why this is four repositories and not one; the five-step evidence path |
-| 02 | The Integer Inference Engine | removing float drift, model binding, what a receipt commits to |
-| 03 | `chain_c` | the porting contract, byte-exact chain layer, operational safety |
-| 04 | BSV Third Entry | the triple-entry receipt, publication modes, the two-key interlock |
-| 05 | Bonsai Notary | **this repo** — composition root, on-chain generation, portable receipt bundle |
-| 06 | The Complete Trust Path | what the composition proves, and what it deliberately does not |
+| 01 | [The Four-Part Evidence System](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/01-introduction.mp4) | why this is four repositories and not one; the five-step evidence path |
+| 02 | [The Integer Inference Engine](https://github.com/itsmygithubacct/integer_inference_engine/releases/download/media-v1/02-integer-inference-engine.mp4) | removing float drift, model binding, what a receipt commits to |
+| 03 | [`chain_c`](https://github.com/itsmygithubacct/chain_c/releases/download/media-v1/03-chain-c.mp4) | the porting contract, byte-exact chain layer, operational safety |
+| 04 | [BSV Third Entry](https://github.com/itsmygithubacct/bsv_third_entry/releases/download/media-v1/04-bsv-third-entry.mp4) | the triple-entry receipt, publication modes, the two-key interlock |
+| 05 | [Bonsai Notary](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/05-bonsai-notary.mp4) | **this repo** — composition root, on-chain generation, portable receipt bundle |
+| 06 | [The Complete Trust Path](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/06-conclusion.mp4) | what the composition proves, and what it deliberately does not |
 
+Each part title links its episode video (5.5–8.4 MB each). Parts two–four are hosted as
+media releases on their own repositories; parts one, five, and six live on this repo's
+[media release](https://github.com/itsmygithubacct/bonsai-notary/releases/tag/media-v1).
 ## Get it
 
 For a receipt-capable Bonsai-27B agent on a fresh Linux host, use the all-in-one setup:
