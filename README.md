@@ -26,6 +26,23 @@ three independently-versioned projects that it wires together at run time.
 | **On-chain orchestration** | [`bsv_third_entry`](https://github.com/itsmygithubacct/bsv_third_entry) | the Python layer that drives chain_c to publish the Third Entry / run the agent lifecycle | `bsv_third_entry/` (symlink) |
 | **Notary glue** | *this repo* | wallet, launchers, docs, model identity | — |
 
+## Watch the series
+
+**[Trinote: From Deterministic Inference to Durable Evidence](https://github.com/itsmygithubacct/bonsai-notary/releases/download/media-v1/trinote-series-complete.mp4)**
+— a six-part technical series that walks the whole evidence path across all four composed projects
+(1920×1080, 16m28s, 47 MB; published as a
+[media release](https://github.com/itsmygithubacct/bonsai-notary/releases/tag/media-v1) so a clone
+stays small). `bonsai-notary` is part five.
+
+| # | Part | Covers |
+|---|---|---|
+| 01 | The Four-Part Evidence System | why this is four repositories and not one; the five-step evidence path |
+| 02 | The Integer Inference Engine | removing float drift, model binding, what a receipt commits to |
+| 03 | `chain_c` | the porting contract, byte-exact chain layer, operational safety |
+| 04 | BSV Third Entry | the triple-entry receipt, publication modes, the two-key interlock |
+| 05 | Bonsai Notary | **this repo** — composition root, on-chain generation, portable receipt bundle |
+| 06 | The Complete Trust Path | what the composition proves, and what it deliberately does not |
+
 ## Get it
 
 For a receipt-capable Bonsai-27B agent on a fresh Linux host, use the all-in-one setup:
