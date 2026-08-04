@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notary_tools.semantos_verifier import (  # noqa: E402
+    OPERATIONAL_FAILURE_DOMAIN,
     RESULT_DOMAIN,
     VerificationRefused,
     Verifier,
@@ -200,3 +201,71 @@ def test_a_refused_request_records_nothing(tmp_path):
 
     assert run_once(tmp_path, Verifier(signer=FakeSigner(), replay=passing), now=NOW, env={}) == []
     assert not (tmp_path / "results-development").exists()
+
+
+# ── a replay that could not run is not a verdict, and not nothing either ──────
+
+def exploding(_request):
+    raise RuntimeError("replay host fell over")
+
+
+def test_a_crashed_replay_never_becomes_a_verdict(tmp_path):
+    """`fail` means the replay ran and disagreed. A replay that could not run has
+    established nothing, so it must not be written as a verdict."""
+    queue = tmp_path / "verifications"
+    queue.mkdir()
+    (queue / f"{RECEIPT}.json").write_text(json.dumps(request()), encoding="utf-8")
+
+    outcomes = run_once(tmp_path, Verifier(signer=FakeSigner(), replay=exploding), now=NOW, env={})
+
+    assert not (tmp_path / "results-development").exists()
+    assert not (tmp_path / "results").exists()
+    assert "verdict" not in outcomes[0]
+
+
+def test_a_crashed_replay_is_surfaced_rather_than_discarded(tmp_path):
+    """Swallowing it makes a broken replay look exactly like an empty queue, so it
+    stays broken for as long as nobody thinks to look."""
+    queue = tmp_path / "verifications"
+    queue.mkdir()
+    (queue / f"{RECEIPT}.json").write_text(json.dumps(request()), encoding="utf-8")
+
+    outcomes = run_once(tmp_path, Verifier(signer=FakeSigner(), replay=exploding), now=NOW, env={})
+
+    assert [o["domain"] for o in outcomes] == [OPERATIONAL_FAILURE_DOMAIN]
+    assert outcomes[0]["source"] == f"{RECEIPT}.json"
+    assert outcomes[0]["failure"] == "RuntimeError"
+
+
+def test_a_crashed_replay_does_not_abandon_the_rest_of_the_queue(tmp_path):
+    other = "d4" * 32
+    queue = tmp_path / "verifications"
+    queue.mkdir()
+    (queue / f"{RECEIPT}.json").write_text(json.dumps(request()), encoding="utf-8")
+    (queue / f"{other}.json").write_text(json.dumps(request(receiptHash=other)), encoding="utf-8")
+
+    def flaky(req):
+        if req["receiptHash"] == RECEIPT:
+            raise RuntimeError("replay host fell over")
+        return True, None
+
+    outcomes = run_once(tmp_path, Verifier(signer=FakeSigner(), replay=flaky), now=NOW, env={})
+
+    # queue order follows the filename, so assert on content rather than position
+    assert sorted(o["domain"] for o in outcomes) == sorted((OPERATIONAL_FAILURE_DOMAIN, RESULT_DOMAIN))
+    assert (tmp_path / "results-development" / f"{other}.json").exists()
+
+
+def test_an_operational_failure_carries_no_message(tmp_path):
+    """Only the exception type is recorded — a message can carry a filesystem path,
+    and these records are read by whoever operates the worker."""
+    queue = tmp_path / "verifications"
+    queue.mkdir()
+    (queue / f"{RECEIPT}.json").write_text(json.dumps(request()), encoding="utf-8")
+
+    def leaky(_request):
+        raise RuntimeError("/srv/replay/private/secret-material exploded")
+
+    outcomes = run_once(tmp_path, Verifier(signer=FakeSigner(), replay=leaky), now=NOW, env={})
+
+    assert "secret" not in json.dumps(outcomes)
