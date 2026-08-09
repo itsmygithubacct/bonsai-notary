@@ -202,6 +202,9 @@ def test_empty_prompt_is_rejected(args):
     assert "non-empty PROMPT" in result.stderr
 
 
-def test_composition_pins_grouped_projection_engine_release():
+def test_composition_pins_the_accepted_engine_release():
+    # e221e72 descends from both releases this composition was accepted against:
+    # the grouped q35 projection launches (c128983) and the resident GPU
+    # execution/verification hardening (8b32eda).
     lock = (ROOT / "dependencies.lock").read_text()
-    assert "integer_inference_engine 8b32eda95046ab7675699af336475adc66c75e0a" in lock
+    assert "integer_inference_engine e221e72496681672a4519ee92eb11f166d40827b" in lock

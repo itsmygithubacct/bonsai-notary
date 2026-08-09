@@ -8,7 +8,10 @@ C software), `bsv_third_entry/` (on-chain orchestration).
 
 ### Current changes
 
-- Pin the composed integer engine to `c1289837f6aa30935040a3b451c6d5ef031a62b0`.
+- Re-pin the composition to the published mains of all three dependencies: the integer engine at
+  `e221e72496681672a4519ee92eb11f166d40827b`, `chain_c` at
+  `5a8d23c70f7b6442f2017846707c80a07ed08545`, and `bsv_third_entry` at
+  `af48c903426ea75ba34a96c5e8331443fe7d0481`.
 - Propagate explicit CPU entitlements across OpenMP and common BLAS runtimes.
 - Add a fail-closed GPU receipt/replay command with `receipt-run/v1` phase evidence,
   privacy-separated recording, and checksums.
