@@ -1549,3 +1549,85 @@ def test_provider_readiness_failure_is_destroyed_and_audited(tmp_path, monkeypat
     operations = log.read_text().splitlines()
     assert operations.index("create") < operations.index("ready") < operations.index("destroy")
     assert operations[-1] == "active"
+
+
+def _policy_runner(tmp_path: Path, *, policy=None, benchmark=None):
+    argv = [
+        "--notary-home", str(tmp_path / "state"),
+        "--engine-dir", str(ROOT / "engine"),
+        "--python", sys.executable,
+        "--artifact", str(tmp_path / "artifact.safetensors"),
+    ]
+    if policy is not None:
+        argv.extend(["--verifier-policy", str(policy)])
+    if benchmark is not None:
+        argv.extend(["--verifier-policy-evidence", str(benchmark)])
+    args = acceptance.build_parser().parse_args(argv)
+    args.prompt = acceptance.FIXED_PROMPT
+    return acceptance.Runner(args, tmp_path / "evidence")
+
+
+def _write_policy(path: Path) -> Path:
+    path.write_text(json.dumps({
+        "schema": "receipt-verifier-policy/v1",
+        "artifactSha256": "ab" * 32,
+        "threads": 20,
+        "rules": [],
+        "default": {"engine": "native", "strategy": "cached-replay"},
+    }), encoding="utf-8")
+    return path
+
+
+def _write_policy_evidence(path: Path) -> Path:
+    path.write_text(json.dumps({
+        "schema": "receipt-verifier-benchmark/v1",
+        "status": "pass",
+        "artifactSha256": "ab" * 32,
+        "results": [],
+    }), encoding="utf-8")
+    return path
+
+
+def test_acceptance_verifier_policy_requires_its_benchmark_evidence(tmp_path):
+    runner = _policy_runner(tmp_path, policy=_write_policy(tmp_path / "policy.json"))
+    with pytest.raises(acceptance.AcceptanceFailure) as raised:
+        runner.validate_verifier_policy_inputs()
+    assert "requires --verifier-policy-evidence" in str(raised.value)
+    assert raised.value.phase == "prerequisites"
+
+
+def test_acceptance_verifier_policy_evidence_requires_its_policy(tmp_path):
+    runner = _policy_runner(
+        tmp_path, benchmark=_write_policy_evidence(tmp_path / "benchmark.json"),
+    )
+    with pytest.raises(acceptance.AcceptanceFailure) as raised:
+        runner.validate_verifier_policy_inputs()
+    assert "requires --verifier-policy" in str(raised.value)
+
+
+def test_acceptance_rejects_policy_evidence_with_the_wrong_schema(tmp_path):
+    benchmark = tmp_path / "benchmark.json"
+    benchmark.write_text(json.dumps({"schema": "receipt-verifier-policy/v1"}), encoding="utf-8")
+    runner = _policy_runner(
+        tmp_path, policy=_write_policy(tmp_path / "policy.json"), benchmark=benchmark,
+    )
+    with pytest.raises(acceptance.AcceptanceFailure) as raised:
+        runner.validate_verifier_policy_inputs()
+    assert "verifier policy evidence has the wrong schema" in str(raised.value)
+
+
+def test_acceptance_publishes_both_policy_documents_and_passes_them_to_the_engine(tmp_path):
+    evidence_root = tmp_path / "evidence"
+    evidence.initialize(evidence_root)
+    policy = _write_policy(tmp_path / "policy.json")
+    benchmark = _write_policy_evidence(tmp_path / "benchmark.json")
+    runner = _policy_runner(tmp_path, policy=policy, benchmark=benchmark)
+    runner.validate_verifier_policy_inputs()
+
+    published = evidence_root / "verification"
+    assert json.loads((published / "verifier-policy.json").read_text())["threads"] == 20
+    assert (published / "verifier-policy-evidence.json").is_file()
+
+    artifacts = runner.manifest(status="fail", bundle=None, verification=None)["artifacts"]
+    assert artifacts["verifierPolicy"]["sha256"] == evidence.sha256_file(policy)
+    assert artifacts["verifierPolicyEvidence"]["sha256"] == evidence.sha256_file(benchmark)

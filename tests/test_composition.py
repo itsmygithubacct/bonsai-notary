@@ -207,4 +207,4 @@ def test_composition_pins_the_accepted_engine_release():
     # the grouped q35 projection launches (c128983) and the resident GPU
     # execution/verification hardening (8b32eda).
     lock = (ROOT / "dependencies.lock").read_text()
-    assert "integer_inference_engine e221e72496681672a4519ee92eb11f166d40827b" in lock
+    assert "integer_inference_engine 58ba345581fc5d1832d36a1b097f0ec47baca0b6" in lock

@@ -9,9 +9,11 @@ C software), `bsv_third_entry/` (on-chain orchestration).
 ### Current changes
 
 - Re-pin the composition to the published mains of all three dependencies: the integer engine at
-  `e221e72496681672a4519ee92eb11f166d40827b`, `chain_c` at
+  `58ba345581fc5d1832d36a1b097f0ec47baca0b6`, `chain_c` at
   `5a8d23c70f7b6442f2017846707c80a07ed08545`, and `bsv_third_entry` at
   `af48c903426ea75ba34a96c5e8331443fe7d0481`.
+- Require `--verifier-policy-evidence` alongside `--verifier-policy`, publish both documents and their
+  digests into acceptance evidence, and reject an unpaired or wrong-schema pairing in `prerequisites`.
 - Propagate explicit CPU entitlements across OpenMP and common BLAS runtimes.
 - Add a fail-closed GPU receipt/replay command with `receipt-run/v1` phase evidence,
   privacy-separated recording, and checksums.

@@ -252,6 +252,10 @@ class Runner:
         self.verifier_policy = (
             Path(args.verifier_policy).expanduser().resolve() if args.verifier_policy else None
         )
+        self.verifier_policy_evidence = (
+            Path(args.verifier_policy_evidence).expanduser().resolve()
+            if getattr(args, "verifier_policy_evidence", None) else None
+        )
         self.bundle_dir = self.state_home / "bundles"
         self.private_paths = (self.state_home, self.engine, self.root, self.evidence_root, Path.home())
         self.engine_reports: dict[str, dict[str, Any]] = {}
@@ -387,6 +391,55 @@ class Runner:
         print(f"[accept-gpu] {name}: passed in {duration:.2f}s", flush=True)
         return raw_stdout
 
+    def validate_verifier_policy_inputs(self) -> None:
+        """Reject a policy/evidence pairing the pinned engine would refuse later."""
+        # The engine refuses a policy without the benchmark that justifies it, so a
+        # gate that supplied one alone would fail late, inside a phase, for a reason
+        # the operator configured before the run started.
+        if self.verifier_policy is not None and self.verifier_policy_evidence is None:
+            raise AcceptanceFailure(
+                "prerequisites", 4,
+                "--verifier-policy requires --verifier-policy-evidence",
+            )
+        if self.verifier_policy_evidence is not None and self.verifier_policy is None:
+            raise AcceptanceFailure(
+                "prerequisites", 4,
+                "--verifier-policy-evidence requires --verifier-policy",
+            )
+        if self.verifier_policy is not None and not self.verifier_policy.is_file():
+            raise AcceptanceFailure("prerequisites", 4, "configured verifier policy is missing")
+        if self.verifier_policy_evidence is not None and not self.verifier_policy_evidence.is_file():
+            raise AcceptanceFailure(
+                "prerequisites", 4, "configured verifier policy evidence is missing",
+            )
+        for label, path, schema, published in (
+            (
+                "verifier policy", self.verifier_policy,
+                "receipt-verifier-policy/v1", "verifier-policy.json",
+            ),
+            (
+                "verifier policy evidence", self.verifier_policy_evidence,
+                "receipt-verifier-benchmark/v1", "verifier-policy-evidence.json",
+            ),
+        ):
+            if path is None:
+                continue
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise AcceptanceFailure("prerequisites", 4, f"invalid {label}: {exc}") from exc
+            if not isinstance(document, dict) or document.get("schema") != schema:
+                raise AcceptanceFailure("prerequisites", 4, f"{label} has the wrong schema")
+            public_document = sanitize_value(document, private_paths=self.private_paths)
+            if public_document != document or privacy_violations(
+                json.dumps(public_document, sort_keys=True)
+            ):
+                raise AcceptanceFailure("prerequisites", 5, f"{label} failed privacy scan")
+            atomic_write(
+                self.evidence_root / "verification" / published,
+                path.read_bytes(), mode=0o644,
+            )
+
     def prerequisites(self) -> None:
         required = {
             "engine Python": self.python,
@@ -402,22 +455,7 @@ class Runner:
             missing.append("nvidia-smi")
         if missing:
             raise AcceptanceFailure("prerequisites", 4, "missing required inputs: " + ", ".join(missing))
-        if self.verifier_policy is not None and not self.verifier_policy.is_file():
-            raise AcceptanceFailure("prerequisites", 4, "configured verifier policy is missing")
-        if self.verifier_policy is not None:
-            try:
-                policy = json.loads(self.verifier_policy.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise AcceptanceFailure("prerequisites", 4, f"invalid verifier policy: {exc}") from exc
-            if not isinstance(policy, dict) or policy.get("schema") != "receipt-verifier-policy/v1":
-                raise AcceptanceFailure("prerequisites", 4, "verifier policy has the wrong schema")
-            public_policy = sanitize_value(policy, private_paths=self.private_paths)
-            if public_policy != policy or privacy_violations(json.dumps(public_policy, sort_keys=True)):
-                raise AcceptanceFailure("prerequisites", 5, "verifier policy failed privacy scan")
-            atomic_write(
-                self.evidence_root / "verification" / "verifier-policy.json",
-                self.verifier_policy.read_bytes(), mode=0o644,
-            )
+        self.validate_verifier_policy_inputs()
         if self.args.cpu_threads <= 0:
             raise AcceptanceFailure("prerequisites", 2, "CPU thread entitlement must be positive")
         try:
@@ -635,6 +673,11 @@ print(json.dumps(result, sort_keys=True))
                 "file": "verification/verifier-policy.json",
                 "sha256": sha256_file(self.verifier_policy),
             }
+        if self.verifier_policy_evidence is not None and self.verifier_policy_evidence.is_file():
+            artifacts["verifierPolicyEvidence"] = {
+                "file": "verification/verifier-policy-evidence.json",
+                "sha256": sha256_file(self.verifier_policy_evidence),
+            }
         result = {
             "schema": SCHEMA,
             "status": status,
@@ -733,7 +776,10 @@ raise SystemExit(0 if available else 3)
                 "--run-report", str(self.evidence_root / "raw" / "verifier-report.json"), "--json",
             ]
             if self.verifier_policy is not None:
-                verify_command.extend(["--strategy-policy", str(self.verifier_policy)])
+                verify_command.extend([
+                    "--strategy-policy", str(self.verifier_policy),
+                    "--strategy-policy-evidence", str(self.verifier_policy_evidence),
+                ])
             verify_raw = self.command_phase(
                 "bundle-verification", verify_command,
                 stdout_name="verification.json",
@@ -855,7 +901,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-gpu-proof-bytes", type=positive_int, default=15 * (1 << 29),
                         help="maximum accepted CUDA feasibility peak (default: 7.5 GiB)")
     parser.add_argument("--verifier-policy",
-                        help="optional artifact/thread-bound receipt-verifier-policy/v1 JSON")
+                        help="optional artifact/thread-bound receipt-verifier-policy/v1 JSON "
+                             "(requires --verifier-policy-evidence)")
+    parser.add_argument("--verifier-policy-evidence",
+                        help="the complete receipt-verifier-benchmark/v1 report the policy was generated "
+                             "from; the engine recomputes its winners before the policy routes replay")
     parser.add_argument("--dry-run", action="store_true", help="print the phase plan without running commands")
     return parser
 
@@ -1286,6 +1336,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "maxGpuProofBytes": args.max_gpu_proof_bytes,
             "commandTimeoutSeconds": args.command_timeout_seconds,
             "verifierPolicy": str(args.verifier_policy) if args.verifier_policy else None,
+            "verifierPolicyEvidence": (
+                str(args.verifier_policy_evidence) if args.verifier_policy_evidence else None
+            ),
             "recordDir": str(args.record_dir) if args.record_dir else None,
             "media": {
                 "record": args.record_media,

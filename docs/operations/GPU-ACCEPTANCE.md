@@ -15,10 +15,16 @@ strictly opt-in, requires both `--record-dir` and `asciinema`, and does not alte
 The wrapper records the child status separately because asciinema 2 does not propagate it; the acceptance
 command's first nonzero status remains the final status even if later media publication also fails.
 
-Add `--verifier-policy policy.json` to gate replay through an engine benchmark's artifact/thread-bound
-`receipt-verifier-policy/v1`. A policy/thread/artifact mismatch fails; the selected route and policy digest are
-recorded in evidence. A generated policy also fails outside its measured input/output token-count points.
-Without a policy, the engine's exact full-replay `auto` route remains in effect.
+Add `--verifier-policy policy.json --verifier-policy-evidence benchmark.json` to gate replay through an engine
+benchmark's artifact/thread-bound `receipt-verifier-policy/v1`. Both are required together: the pinned engine
+refuses a policy that arrives without the complete benchmark report it was generated from, and recomputes that
+report's release matrix and winners before the policy may route anything. Supplying one alone is rejected in
+`prerequisites`, before any phase runs, rather than surfacing later as a failed verification phase.
+
+A policy/thread/artifact mismatch fails; the selected route and both document digests are recorded in evidence,
+and the policy and its benchmark are published to `verification/verifier-policy.json` and
+`verification/verifier-policy-evidence.json`. A generated policy also fails outside its measured input/output
+token-count points. Without a policy, the engine's exact full-replay `auto` route remains in effect.
 
 The runner sets `BONSAI_CPU_THREADS`, OpenMP, OpenBLAS, MKL, BLIS, VecLib, NumExpr, and the fresh-oracle
 `TRINOTE_ORACLE_Q1_THREADS` bound to the same positive value. It then runs these dependent phases in order and
