@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from notary_tools import acceptance, evidence, handoff
+from notary_tools import acceptance, evidence, handoff, media
 from operations import provider_lifecycle as lifecycle
 
 
@@ -283,6 +283,574 @@ def test_evidence_schema_separates_private_raw_and_checksums_public_only(tmp_pat
     assert "manifest.json" in sums
     assert "raw/private.log" not in sums
     assert stat.S_IMODE((tmp_path / "raw").stat().st_mode) == 0o700
+
+
+def _fake_media_tools(directory: Path) -> tuple[media.MediaTools, Path]:
+    directory.mkdir()
+    log = directory / "calls.jsonl"
+    asciinema = directory / "asciinema"
+    asciinema.write_text("""#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+with Path(os.environ["FAKE_MEDIA_LOG"]).open("a") as stream:
+    stream.write(json.dumps(["asciinema", *args]) + "\\n")
+command = args[args.index("--command") + 1]
+result = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, env=os.environ)
+header = {"version":2, "width":int(args[args.index("--cols") + 1]),
+          "height":int(args[args.index("--rows") + 1]), "timestamp":123,
+          "env":{"SHELL":"/bin/sh", "TERM":"xterm-256color"}}
+events = [[0.0, "o", line + "\\n"] for line in result.stdout.splitlines()]
+Path(args[-1]).write_text("\\n".join(
+    [json.dumps(header), *(json.dumps(event) for event in events)]
+) + "\\n")
+raise SystemExit(0)
+""")
+    agg = directory / "agg"
+    agg.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+with Path(os.environ["FAKE_MEDIA_LOG"]).open("a") as stream:
+    stream.write(json.dumps(["agg", *sys.argv[1:]]) + "\\n")
+Path(sys.argv[-1]).write_bytes(b"GIF89a-fixture")
+""")
+    ffmpeg = directory / "ffmpeg"
+    ffmpeg.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+with Path(os.environ["FAKE_MEDIA_LOG"]).open("a") as stream:
+    stream.write(json.dumps(["ffmpeg", *sys.argv[1:]]) + "\\n")
+Path(sys.argv[-1]).write_bytes(b"mp4-fixture")
+""")
+    for tool in (asciinema, agg, ffmpeg):
+        tool.chmod(0o755)
+    return media.MediaTools(str(asciinema), str(agg), str(ffmpeg)), log
+
+
+def _write_cast(path: Path, *events: tuple[float, str]) -> None:
+    lines = [json.dumps({
+        "version": 2, "width": media.TERMINAL_COLUMNS, "height": media.TERMINAL_ROWS,
+        "timestamp": 987654321, "env": {"SHELL": "/bin/sh", "TERM": "xterm-256color"},
+    })]
+    lines.extend(json.dumps([timestamp, "o", value]) for timestamp, value in events)
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_media_recording_uses_fixed_geometry_and_preserves_child_exit(tmp_path, monkeypatch):
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    raw_cast = tmp_path / "raw.cast"
+    status = tmp_path / "status.txt"
+    code = media.record_command(
+        [sys.executable, "-c", "print('first'); print('second'); raise SystemExit(23)"],
+        raw_cast=raw_cast, status_path=status, tools=tools, cwd=ROOT, env=os.environ,
+    )
+    assert code == 23
+    assert status.read_text() == "23\n"
+    invocation = json.loads(log.read_text().splitlines()[0])
+    assert invocation[0] == "asciinema"
+    assert invocation[invocation.index("--cols") + 1] == "120"
+    assert invocation[invocation.index("--rows") + 1] == "36"
+    assert "--idle-time-limit" not in invocation
+    cast_lines = raw_cast.read_text().splitlines()
+    assert json.loads(cast_lines[0])["env"]["TERM"] == "xterm-256color"
+    assert [json.loads(line)[2].strip() for line in cast_lines[1:]] == ["first", "second"]
+
+
+def test_media_recording_imports_helper_from_non_repo_cwd(tmp_path, monkeypatch):
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    raw_cast = tmp_path / "raw.cast"
+    status = tmp_path / "status.txt"
+    child_env = os.environ.copy()
+    child_env.pop("PYTHONPATH", None)
+    code = media.record_command(
+        [sys.executable, "-c", "print('outside repository')"],
+        raw_cast=raw_cast,
+        status_path=status,
+        tools=tools,
+        cwd=outside,
+        env=child_env,
+    )
+    assert code == 0
+    assert status.read_text() == "0\n"
+    assert "outside repository" in raw_cast.read_text()
+
+
+@pytest.mark.parametrize("private_text", [
+    "K" + "1" * 51,
+    "K" + "1" * 19 + "\u200b" + "1" * 32,
+    "mnemo" + "nic words",
+    "private" + "_key=not-public",
+    "oauth" + "_token=not-public-value",
+    "ssh7." + "vast.ai:22022",
+    "/root",
+    "/workspace",
+    "/秘密",
+    "/unlisted/private/location",
+    "file:///unlisted/private/location",
+    "path:/unlisted/private/location",
+    "//server/share/private",
+    r"\\server\share\private",
+])
+def test_media_privacy_rejection_prevents_rendering(tmp_path, monkeypatch, private_text):
+    evidence.initialize(tmp_path / "evidence")
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    raw = tmp_path / "evidence" / "raw" / media.RAW_CAST_NAME
+    _write_cast(raw, (0.0, private_text))
+    with pytest.raises(media.MediaError) as raised:
+        media.publish_recording(
+            tmp_path / "evidence", command_exit_code=0, tools=tools,
+        )
+    assert raised.value.code == media.MEDIA_PRIVACY_EXIT
+    assert raised.value.manifest["privacy"]["status"] == "fail"
+    assert raised.value.manifest["rendering"]["status"] == "rejected-privacy"
+    assert not (tmp_path / "evidence" / "public" / media.PUBLIC_CAST_NAME).exists()
+    assert not log.exists(), "privacy rejection must occur before either render tool runs"
+
+
+def test_media_privacy_scan_rejects_secret_split_across_cast_events(tmp_path, monkeypatch):
+    evidence.initialize(tmp_path / "evidence")
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    secret = "K" + "1" * 51
+    _write_cast(
+        tmp_path / "evidence" / "raw" / media.RAW_CAST_NAME,
+        (0.0, secret[:20]), (0.1, secret[20:]),
+    )
+    with pytest.raises(media.MediaError, match="cross-event"):
+        media.publish_recording(tmp_path / "evidence", command_exit_code=0, tools=tools)
+    assert not log.exists()
+
+
+def test_media_privacy_scan_rejects_secret_split_by_terminal_sgr(tmp_path, monkeypatch):
+    evidence.initialize(tmp_path / "evidence")
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    secret = "K" + "1" * 51
+    _write_cast(
+        tmp_path / "evidence" / "raw" / media.RAW_CAST_NAME,
+        (0.0, secret[:20] + "\x1b[31m" + secret[20:] + "\x1b[0m"),
+    )
+    with pytest.raises(media.MediaError, match="WIF"):
+        media.publish_recording(tmp_path / "evidence", command_exit_code=0, tools=tools)
+    assert not (tmp_path / "evidence" / "public" / media.PUBLIC_CAST_NAME).exists()
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(("private_text", "expected_violation"), [
+    ("K" + "1" * 19 + "\u200b" + "1" * 32, "WIF"),
+    ("/秘密", "absolute host path"),
+])
+def test_media_unicode_privacy_scan_covers_invisible_controls_and_paths(
+        private_text, expected_violation):
+    assert expected_violation in media._public_privacy_violations(private_text)
+
+
+@pytest.mark.parametrize("public_text", [
+    "https://example.com/public/docs",
+    "ratio 1/2",
+    "namespace//token",
+    "// comment with a separating space",
+])
+def test_media_absolute_path_scan_allows_ordinary_public_text(public_text):
+    assert "absolute host path" not in media._public_privacy_violations(public_text)
+
+
+@pytest.mark.parametrize("marker", ["<redacted-home>", "<redacted-path>"])
+def test_media_absolute_path_scan_preserves_documented_redaction_markers(marker):
+    assert media._public_privacy_violations(f"{marker}/秘密/file.json") == []
+
+
+def test_media_known_private_path_redaction_remains_publishable(tmp_path):
+    evidence.initialize(tmp_path / "evidence")
+    private_root = tmp_path / "private-root"
+    _write_cast(
+        tmp_path / "evidence" / "raw" / media.RAW_CAST_NAME,
+        (0.0, f"result: {private_root}/nested/file.json\n"),
+    )
+    manifest, _path = media.publish_recording(
+        tmp_path / "evidence",
+        command_exit_code=0,
+        tools=media.MediaTools("asciinema", None, None),
+        private_paths=(private_root,),
+    )
+    public_cast = (tmp_path / "evidence" / "public" / media.PUBLIC_CAST_NAME).read_text()
+    assert manifest["status"] == "pass"
+    assert str(private_root) not in public_cast
+    assert "<redacted-path>/nested/file.json" in public_cast
+
+
+def test_media_recorder_failure_still_carries_the_completed_child_exit(tmp_path):
+    raw_cast = tmp_path / "raw.cast"
+    status = tmp_path / "status.txt"
+
+    def failed_recorder(invocation, **_kwargs):
+        _write_cast(raw_cast, (0.0, "child failed\n"))
+        status.write_text("23\n")
+        return subprocess.CompletedProcess(invocation, 1)
+
+    with pytest.raises(media.MediaError, match="recorder exited") as raised:
+        media.record_command(
+            [sys.executable, "-c", "raise SystemExit(23)"],
+            raw_cast=raw_cast,
+            status_path=status,
+            tools=media.MediaTools("asciinema", None, None),
+            cwd=ROOT,
+            run=failed_recorder,
+        )
+    assert raised.value.command_exit_code == 23
+    assert raised.value.effective_exit_code == 23
+
+
+def test_media_manifest_is_deterministic_and_checksums_public_artifacts(
+        tmp_path, monkeypatch):
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    roots = [tmp_path / "first", tmp_path / "second"]
+    manifests = []
+    paths = []
+    for root in roots:
+        evidence.initialize(root)
+        _write_cast(
+            root / "raw" / media.RAW_CAST_NAME,
+            (0.0, "phase one\n"), (97.25, "phase two\n"),
+        )
+        manifest, path = media.publish_recording(
+            root, command_exit_code=0, tools=tools,
+            idle_limit_seconds=1.0, playback_speed=1.5,
+        )
+        manifests.append(manifest)
+        paths.append(path)
+    assert manifests[0] == manifests[1]
+    assert paths[0].read_bytes() == paths[1].read_bytes()
+    assert manifests[0]["publicCast"]["sourceTimelineSeconds"] == 97.25
+    public_events = [
+        json.loads(line) for line in (roots[0] / "public" / media.PUBLIC_CAST_NAME)
+        .read_text().splitlines()[1:]
+    ]
+    assert [event[0] for event in public_events] == [0.0, 97.25]
+    assert (roots[0] / "public" / media.GIF_NAME).is_file()
+    assert (roots[0] / "public" / media.MP4_NAME).is_file()
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    agg_call = next(call for call in calls if call[0] == "agg")
+    assert agg_call[agg_call.index("--idle-time-limit") + 1] == "1.0"
+
+    evidence.write_json(roots[0] / "manifest.json", {
+        "schema": acceptance.SCHEMA, "status": "pass", "label": "VERIFIED",
+        "firstFailure": None, "artifacts": {}, "evidence": {},
+    }, public=True)
+    aggregate = acceptance._integrate_media(
+        roots[0], media_manifest=manifests[0], media_manifest_path=paths[0],
+        media_error=None, command_exit_code=0,
+    )
+    assert aggregate["artifacts"]["media"]["status"] == "pass"
+    sums = (roots[0] / "SHA256SUMS").read_text()
+    for name in (media.PUBLIC_CAST_NAME, media.GIF_NAME, media.MP4_NAME, media.MANIFEST_NAME):
+        assert f"public/{name}" in sums
+    assert "raw/acceptance.cast" not in sums
+
+
+def test_media_auto_mode_publishes_cast_when_renderers_are_unavailable(tmp_path):
+    evidence.initialize(tmp_path)
+    _write_cast(tmp_path / "raw" / media.RAW_CAST_NAME, (0.0, "phase passed\n"))
+    manifest, path = media.publish_recording(
+        tmp_path,
+        command_exit_code=0,
+        tools=media.MediaTools("asciinema", None, None),
+    )
+    assert path.is_file()
+    assert manifest["status"] == "pass"
+    assert manifest["rendering"]["status"] == "skipped-tools-unavailable"
+    assert (tmp_path / "public" / media.PUBLIC_CAST_NAME).is_file()
+    assert not (tmp_path / "public" / media.GIF_NAME).exists()
+    assert not (tmp_path / "public" / media.MP4_NAME).exists()
+
+
+def test_media_render_publication_oserror_becomes_structured_failure(tmp_path, monkeypatch):
+    evidence.initialize(tmp_path / "evidence")
+    tools, log = _fake_media_tools(tmp_path / "tools")
+    monkeypatch.setenv("FAKE_MEDIA_LOG", str(log))
+    _write_cast(
+        tmp_path / "evidence" / "raw" / media.RAW_CAST_NAME,
+        (0.0, "phase passed\n"),
+    )
+    real_replace = media.os.replace
+
+    def fail_gif_move(source, destination):
+        if Path(source).name == "acceptance.render.gif":
+            raise OSError("injected render move failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(media.os, "replace", fail_gif_move)
+    with pytest.raises(media.MediaError, match="could not be published") as raised:
+        media.publish_recording(
+            tmp_path / "evidence",
+            command_exit_code=0,
+            tools=tools,
+        )
+    assert raised.value.manifest["status"] == "fail"
+    assert raised.value.manifest["privacy"]["status"] == "pass"
+    assert raised.value.manifest["rendering"]["status"] == "fail"
+    assert raised.value.manifest_path.is_file()
+
+
+def test_media_manifest_write_oserror_becomes_structured_failure(tmp_path, monkeypatch):
+    evidence.initialize(tmp_path)
+    _write_cast(tmp_path / "raw" / media.RAW_CAST_NAME, (0.0, "phase passed\n"))
+    real_write_json = media.write_json
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected manifest write failure")
+        return real_write_json(*args, **kwargs)
+
+    monkeypatch.setattr(media, "write_json", fail_once)
+    with pytest.raises(media.MediaError, match="artifact publication failed") as raised:
+        media.publish_recording(
+            tmp_path,
+            command_exit_code=0,
+            tools=media.MediaTools("asciinema", None, None),
+        )
+    assert raised.value.manifest["status"] == "fail"
+    assert raised.value.manifest_path.is_file()
+
+
+def test_media_failure_does_not_replace_the_acceptance_first_failure(tmp_path):
+    evidence.initialize(tmp_path)
+    evidence.write_json(tmp_path / "manifest.json", {
+        "schema": acceptance.SCHEMA,
+        "status": "fail",
+        "label": "FAILED",
+        "firstFailure": {"phase": "cuda-parity", "exitCode": 23, "message": "command exited 23"},
+        "artifacts": {},
+        "evidence": {},
+    }, public=True)
+    media_manifest = {
+        "schema": media.MEDIA_SCHEMA,
+        "status": "fail",
+        "rawCast": {"sha256": "11" * 32},
+        "rendering": {"status": "rejected-privacy"},
+    }
+    media_path = tmp_path / "public" / media.MANIFEST_NAME
+    evidence.write_json(media_path, media_manifest, public=True)
+    media_error = media.MediaError("public recording rejected")
+    aggregate = acceptance._integrate_media(
+        tmp_path,
+        media_manifest=media_manifest,
+        media_manifest_path=media_path,
+        media_error=media_error,
+        command_exit_code=23,
+    )
+    assert aggregate["status"] == "fail"
+    assert aggregate["firstFailure"] == {
+        "phase": "cuda-parity", "exitCode": 23, "message": "command exited 23",
+    }
+    assert aggregate["evidence"]["recording"]["commandExitCode"] == 23
+
+
+def test_media_checksum_oserror_marks_passing_aggregate_failed(tmp_path, monkeypatch):
+    evidence.initialize(tmp_path)
+    evidence.write_json(tmp_path / "manifest.json", {
+        "schema": acceptance.SCHEMA,
+        "status": "pass",
+        "label": "VERIFIED",
+        "firstFailure": None,
+        "artifacts": {},
+        "evidence": {},
+    }, public=True)
+    media_manifest = {
+        "schema": media.MEDIA_SCHEMA,
+        "status": "pass",
+        "rawCast": {"sha256": "11" * 32},
+        "rendering": {"status": "skipped-tools-unavailable"},
+    }
+    media_path = tmp_path / "public" / media.MANIFEST_NAME
+    evidence.write_json(media_path, media_manifest, public=True)
+    monkeypatch.setattr(
+        acceptance,
+        "write_checksums",
+        lambda _root: (_ for _ in ()).throw(OSError("injected checksum failure")),
+    )
+    with pytest.raises(media.MediaError, match="checksums could not be written"):
+        acceptance._integrate_media(
+            tmp_path,
+            media_manifest=media_manifest,
+            media_manifest_path=media_path,
+            media_error=None,
+            command_exit_code=0,
+        )
+    aggregate = json.loads((tmp_path / "manifest.json").read_text())
+    assert aggregate["status"] == "fail"
+    assert aggregate["label"] == "FAILED"
+    assert aggregate["firstFailure"]["phase"] == "media-publication"
+
+
+def _write_fake_acceptance_result(root: Path, *, exit_code: int) -> None:
+    evidence.initialize(root)
+    failed = exit_code != 0
+    evidence.write_json(root / "manifest.json", {
+        "schema": acceptance.SCHEMA,
+        "status": "fail" if failed else "pass",
+        "label": "FAILED" if failed else "VERIFIED",
+        "firstFailure": (
+            {"phase": "cuda-parity", "exitCode": exit_code, "message": f"command exited {exit_code}"}
+            if failed else None
+        ),
+        "artifacts": {},
+        "evidence": {},
+    }, public=True)
+    evidence.write_checksums(root)
+
+
+def test_recorded_acceptance_preserves_caller_relative_paths(tmp_path, monkeypatch):
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    root = caller / "relative-evidence"
+    tools = media.MediaTools("asciinema", None, None)
+    monkeypatch.setattr(media, "detect_tools", lambda **_kwargs: tools)
+    observed: dict[str, object] = {}
+
+    def fake_record(command, *, raw_cast, status_path, cwd, env, **_kwargs):
+        observed.update(command=list(command), cwd=cwd, env=dict(env))
+        _write_fake_acceptance_result(root, exit_code=23)
+        _write_cast(raw_cast, (0.0, "acceptance failed\n"))
+        status_path.write_text("23\n")
+        return 23
+
+    monkeypatch.setattr(media, "record_command", fake_record)
+    relative_options = {
+        "--record-dir": "relative-evidence",
+        "--notary-home": "relative-state",
+        "--engine-dir": "relative-engine",
+        "--python": "relative-engine/python",
+        "--artifact": "relative-model/model.safetensors",
+        "--verifier-policy": "relative-policy/verifier.json",
+    }
+    argv = ["--record-media", "--cpu-threads", "1"]
+    for option, value in relative_options.items():
+        argv.extend([option, value])
+    code = acceptance.main(argv)
+
+    assert code == 23
+    assert observed["cwd"] == caller
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert Path(command[1]) == ROOT / "scripts" / "accept-gpu.py"
+    for option, value in relative_options.items():
+        assert command[command.index(option) + 1] == value
+    assert root.is_dir()
+    aggregate = json.loads((root / "manifest.json").read_text())
+    assert aggregate["evidence"]["recording"]["commandExitCode"] == 23
+
+
+def test_recorded_acceptance_copy_failure_replaces_persisted_pass(tmp_path, monkeypatch):
+    root = tmp_path / "evidence"
+    tools = media.MediaTools("asciinema", None, None)
+    monkeypatch.setattr(media, "detect_tools", lambda **_kwargs: tools)
+
+    def fake_record(_command, *, raw_cast, status_path, **_kwargs):
+        _write_fake_acceptance_result(root, exit_code=0)
+        _write_cast(raw_cast, (0.0, "acceptance passed\n"))
+        status_path.write_text("0\n")
+        return 0
+
+    monkeypatch.setattr(media, "record_command", fake_record)
+    monkeypatch.setattr(
+        acceptance.shutil,
+        "copy2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected copy failure")),
+    )
+    code = acceptance.main([
+        "--record-dir", str(root), "--record-media", "--cpu-threads", "1",
+    ])
+    aggregate = json.loads((root / "manifest.json").read_text())
+    assert code == media.MEDIA_PRIVACY_EXIT
+    assert aggregate["status"] == "fail"
+    assert aggregate["label"] == "FAILED"
+    assert aggregate["firstFailure"]["phase"] == "media-publication"
+    assert aggregate["artifacts"]["media"]["status"] == "fail"
+    assert (root / "public" / media.MANIFEST_NAME).is_file()
+
+
+def test_recorded_acceptance_incomplete_evidence_replaces_persisted_pass(tmp_path, monkeypatch):
+    root = tmp_path / "evidence"
+    tools = media.MediaTools("asciinema", None, None)
+    monkeypatch.setattr(media, "detect_tools", lambda **_kwargs: tools)
+
+    def fake_record(_command, *, raw_cast, status_path, **_kwargs):
+        _write_fake_acceptance_result(root, exit_code=0)
+        (root / "bundle").rmdir()
+        _write_cast(raw_cast, (0.0, "acceptance passed\n"))
+        status_path.write_text("0\n")
+        return 0
+
+    monkeypatch.setattr(media, "record_command", fake_record)
+    code = acceptance.main([
+        "--record-dir", str(root), "--record-media", "--cpu-threads", "1",
+    ])
+    aggregate = json.loads((root / "manifest.json").read_text())
+    assert code == media.MEDIA_PRIVACY_EXIT
+    assert aggregate["status"] == "fail"
+    assert aggregate["firstFailure"]["phase"] == "media-publication"
+
+
+def test_recorded_acceptance_recorder_error_preserves_child_first_exit(tmp_path, monkeypatch):
+    root = tmp_path / "evidence"
+    tools = media.MediaTools("asciinema", None, None)
+    monkeypatch.setattr(media, "detect_tools", lambda **_kwargs: tools)
+
+    def fake_record(_command, *, raw_cast, status_path, **_kwargs):
+        _write_fake_acceptance_result(root, exit_code=23)
+        _write_cast(raw_cast, (0.0, "acceptance failed\n"))
+        status_path.write_text("23\n")
+        raise media.MediaError(
+            "asciinema recorder exited 1",
+            code=media.MEDIA_TOOL_EXIT,
+            command_exit_code=23,
+        )
+
+    monkeypatch.setattr(media, "record_command", fake_record)
+    code = acceptance.main([
+        "--record-dir", str(root), "--record-media", "--cpu-threads", "1",
+    ])
+    aggregate = json.loads((root / "manifest.json").read_text())
+    assert code == 23
+    assert aggregate["status"] == "fail"
+    assert aggregate["firstFailure"] == {
+        "phase": "cuda-parity", "exitCode": 23, "message": "command exited 23",
+    }
+    assert aggregate["artifacts"]["media"]["status"] == "fail"
+
+
+def test_media_required_render_fails_closed_when_fake_tool_is_missing():
+    locations = {"asciinema": "/fixture/asciinema", "agg": "/fixture/agg"}
+    with pytest.raises(media.MediaError) as raised:
+        media.detect_tools(locations.get, require_render=True)
+    assert raised.value.code == media.MEDIA_TOOL_EXIT
+    assert "ffmpeg" in str(raised.value)
+
+
+def test_media_is_optional_and_default_acceptance_does_not_probe_tools(monkeypatch):
+    called = False
+
+    def forbidden_probe(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("media tools must not be probed without --record-media")
+
+    monkeypatch.setattr(media, "detect_tools", forbidden_probe)
+    monkeypatch.setattr(acceptance, "_run_acceptance", lambda _args: 0)
+    assert acceptance.main(["--cpu-threads", "1"]) == 0
+    assert called is False
 
 
 def _strict_result(bundle_sha256: str, index: int = 0) -> dict:

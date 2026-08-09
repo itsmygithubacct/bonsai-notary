@@ -235,6 +235,12 @@ namespaces. Publication redacts private paths, WIFs, private-key/mnemonic fields
 URLs, and provider SSH endpoints, then fails if those patterns remain. Raw evidence can still contain private
 host facts and must never be published without an independent review.
 
+Optional `--record-media` capture follows the same boundary: the real-time cast remains under `raw/`, while
+only a fixed-geometry, rescanned public cast can reach the renderers. Rendering is refused if WIF, mnemonic,
+private-key, OAuth, provider-host, or absolute host-path patterns remain; playback idle limits never rewrite the
+source timeline. Privacy scans remove harmless terminal color controls from their comparison view and reject
+unsupported terminal controls, so escape sequences cannot split or visually conceal a forbidden value.
+
 The provider-neutral lifecycle controller in `operations/` has no bundled provider adapter or credential.
 Read-only planning cannot create a rental. Creation requires both `--authorize-billing` and an exact repetition
 of the descriptor's storage-inclusive hourly ceiling. A 256-bit idempotency token is durably recorded before

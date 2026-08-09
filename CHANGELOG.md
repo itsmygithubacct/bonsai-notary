@@ -12,6 +12,8 @@ C software), `bsv_third_entry/` (on-chain orchestration).
 - Propagate explicit CPU entitlements across OpenMP and common BLAS runtimes.
 - Add a fail-closed GPU receipt/replay command with `receipt-run/v1` phase evidence,
   privacy-separated recording, and checksums.
+- Add opt-in fixed-geometry terminal capture with privacy-gated public cast, GIF/MP4 rendering,
+  real child-exit preservation, and media artifact hashes.
 - Add signed pending-producer/CPU-verifier handoff schemas with batch-worker hooks.
 - Add Ubuntu 22.04 dependency-environment acceptance and provider-neutral lifecycle tooling.
 

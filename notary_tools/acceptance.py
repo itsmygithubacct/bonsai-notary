@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+from . import media
 from .evidence import (
     SCHEMA,
     atomic_write,
@@ -52,6 +54,7 @@ DEPENDENCIES = (
 )
 GIT_TIMEOUT_SECONDS = 10
 COMMAND_TIMEOUT_EXIT = 124
+_SUPPRESS_FINAL_ENV = "BONSAI_ACCEPT_GPU_SUPPRESS_FINAL"
 
 
 def utc_now() -> str:
@@ -65,6 +68,16 @@ def positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be a positive integer") from exc
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
     return parsed
 
 
@@ -813,6 +826,22 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run the fail-closed Bonsai-27B CUDA receipt and replay acceptance gate."
     )
     parser.add_argument("--record-dir", type=Path, help="persist raw/public/bundle/verification evidence here")
+    parser.add_argument(
+        "--record-media", action="store_true",
+        help="record the acceptance terminal at 120x36; requires --record-dir and asciinema",
+    )
+    parser.add_argument(
+        "--require-media-render", action="store_true",
+        help="with --record-media, fail unless both GIF and MP4 render tools are available",
+    )
+    parser.add_argument(
+        "--media-idle-limit-seconds", type=positive_float, default=1.0,
+        help="render-only idle cap in seconds; source cast timing is unchanged (default: 1)",
+    )
+    parser.add_argument(
+        "--media-speed", type=positive_float, default=1.5,
+        help="GIF/MP4 playback speed without changing source cast timing (default: 1.5)",
+    )
     parser.add_argument("--cpu-threads", type=positive_int,
                         default=positive_int(os.environ.get("BONSAI_CPU_THREADS", str(os.cpu_count() or 1))))
     parser.add_argument("--notary-home", default=str(state_home))
@@ -831,43 +860,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    if args.artifact is None:
-        args.artifact = str(
-            Path(args.notary_home).expanduser()
-            / "models" / "Bonsai-27B-Q1_0-int-qwen35.safetensors"
-        )
-    args.prompt = FIXED_PROMPT
-    if args.dry_run:
-        print(json.dumps({
-            "schema": SCHEMA,
-            "dryRun": True,
-            "gpuRequired": True,
-            "cpuThreads": args.cpu_threads,
-            "maxGpuProofBytes": args.max_gpu_proof_bytes,
-            "commandTimeoutSeconds": args.command_timeout_seconds,
-            "verifierPolicy": str(args.verifier_policy) if args.verifier_policy else None,
-            "recordDir": str(args.record_dir) if args.record_dir else None,
-            "phases": [
-                "prerequisites", "gpu-identity", "cuda-availability", "telemetry-start",
-                "cuda-parity", "signer-metadata", "one-token-receipt", "producer-report", "bundle",
-                "bundle-verification", "verifier-report",
-                "telemetry-stop",
-            ],
-            "networkBroadcastAttempted": False,
-        }, indent=2, sort_keys=True))
-        return 0
+def _record_path_error(record_dir: Path) -> str | None:
+    if record_dir.exists():
+        if not record_dir.is_dir():
+            return f"record path is not a directory: {record_dir}"
+        if any(record_dir.iterdir()):
+            return f"record directory is not empty: {record_dir}"
+    return None
+
+
+def _run_acceptance(args: argparse.Namespace) -> int:
     temporary: tempfile.TemporaryDirectory[str] | None = None
     if args.record_dir:
         evidence_root = args.record_dir.expanduser().resolve()
-        if evidence_root.exists():
-            if not evidence_root.is_dir():
-                print(f"accept-gpu: record path is not a directory: {evidence_root}", file=sys.stderr)
-                return 2
-            if any(evidence_root.iterdir()):
-                print(f"accept-gpu: record directory is not empty: {evidence_root}", file=sys.stderr)
-                return 2
+        problem = _record_path_error(evidence_root)
+        if problem:
+            print(f"accept-gpu: {problem}", file=sys.stderr)
+            return 2
     else:
         temporary = tempfile.TemporaryDirectory(prefix="bonsai-acceptance-")
         evidence_root = Path(temporary.name)
@@ -878,13 +887,424 @@ def main(argv: Sequence[str] | None = None) -> int:
     if privacy_violations(rendered):
         print("accept-gpu: refusing manifest with private material", file=sys.stderr)
         code = code or 5
-    else:
+    elif os.environ.get(_SUPPRESS_FINAL_ENV) != "1":
         print(rendered)
         if args.record_dir:
             print(f"[accept-gpu] evidence: {evidence_root}", file=sys.stderr)
     if temporary is not None:
         temporary.cleanup()
     return code
+
+
+def _media_child_argv(argv: Sequence[str]) -> list[str]:
+    """Remove media-only switches from the command recorded by asciinema."""
+    result: list[str] = []
+    skip_value = False
+    value_options = {"--media-idle-limit-seconds", "--media-speed"}
+    for argument in argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if argument in {"--record-media", "--require-media-render"}:
+            continue
+        if argument in value_options:
+            skip_value = True
+            continue
+        if any(argument.startswith(f"{option}=") for option in value_options):
+            continue
+        result.append(argument)
+    if skip_value:
+        raise ValueError("media option is missing its value")
+    return result
+
+
+def _media_summary(root: Path, manifest: dict[str, Any], manifest_path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "status": manifest.get("status"),
+        "manifest": manifest_path.relative_to(root).as_posix(),
+        "manifestSha256": sha256_file(manifest_path),
+        "rawCastSha256": (manifest.get("rawCast") or {}).get("sha256"),
+        "renderingStatus": (manifest.get("rendering") or {}).get("status"),
+    }
+    for label in ("publicCast", "gif", "mp4"):
+        artifact = manifest.get(label)
+        if isinstance(artifact, dict):
+            summary[f"{label}Sha256"] = artifact.get("sha256")
+    return summary
+
+
+def _read_acceptance_aggregate(evidence_root: Path) -> dict[str, Any]:
+    aggregate_path = evidence_root / "manifest.json"
+    try:
+        aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise media.MediaError("acceptance child did not produce a valid manifest") from exc
+    if not isinstance(aggregate, dict) or aggregate.get("schema") != SCHEMA:
+        raise media.MediaError("acceptance child manifest has the wrong schema")
+    return aggregate
+
+
+def _recorded_child_exit(aggregate: dict[str, Any]) -> int | None:
+    """Recover the child's result when its private status sidecar is unavailable."""
+    if aggregate.get("status") == "pass":
+        return 0
+    failure = aggregate.get("firstFailure")
+    if isinstance(failure, dict):
+        code = failure.get("exitCode")
+        if type(code) is int and 0 < code <= 255:
+            return code
+    return None
+
+
+def _mark_media_failure(
+    aggregate: dict[str, Any],
+    error: media.MediaError,
+    command_exit_code: int | None,
+) -> None:
+    if command_exit_code not in (None, 0):
+        return
+    aggregate["status"] = "fail"
+    aggregate["label"] = "FAILED"
+    if aggregate.get("firstFailure") is None:
+        aggregate["firstFailure"] = {
+            "phase": "media-publication",
+            "exitCode": error.code,
+            "message": str(error),
+        }
+
+
+def _integrate_media(
+    evidence_root: Path,
+    *,
+    media_manifest: dict[str, Any],
+    media_manifest_path: Path,
+    media_error: media.MediaError | None,
+    command_exit_code: int | None,
+) -> dict[str, Any]:
+    aggregate_path = evidence_root / "manifest.json"
+    try:
+        aggregate = _read_acceptance_aggregate(evidence_root)
+        artifacts = aggregate.setdefault("artifacts", {})
+        if not isinstance(artifacts, dict):
+            raise media.MediaError("acceptance child manifest artifacts are malformed")
+        artifacts["media"] = _media_summary(evidence_root, media_manifest, media_manifest_path)
+        evidence_record = aggregate.setdefault("evidence", {})
+        if not isinstance(evidence_record, dict):
+            raise media.MediaError("acceptance child evidence record is malformed")
+        evidence_record["recording"] = {
+            "optIn": True,
+            "rawCastPublic": False,
+            "terminal": {"columns": media.TERMINAL_COLUMNS, "rows": media.TERMINAL_ROWS},
+            "commandExitCode": command_exit_code,
+        }
+        if media_error is not None:
+            _mark_media_failure(aggregate, media_error, command_exit_code)
+        write_json(aggregate_path, aggregate, public=True)
+    except media.MediaError:
+        raise
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise media.MediaError(
+            "media evidence integration failed",
+            command_exit_code=command_exit_code,
+        ) from exc
+    try:
+        write_checksums(evidence_root)
+    except OSError as exc:
+        checksum_error = media.MediaError(
+            "media evidence checksums could not be written",
+            command_exit_code=command_exit_code,
+        )
+        _mark_media_failure(aggregate, checksum_error, command_exit_code)
+        try:
+            write_json(aggregate_path, aggregate, public=True)
+        except OSError:
+            pass
+        raise checksum_error from exc
+    return aggregate
+
+
+def _persist_media_failure_without_manifest(
+    evidence_root: Path,
+    *,
+    error: media.MediaError,
+    command_exit_code: int | None,
+) -> dict[str, Any]:
+    """Best-effort fail marker when even the media manifest cannot be retained."""
+    aggregate = _read_acceptance_aggregate(evidence_root)
+    artifacts = aggregate.setdefault("artifacts", {})
+    if not isinstance(artifacts, dict):
+        raise media.MediaError("acceptance child manifest artifacts are malformed")
+    artifacts["media"] = {
+        "status": "fail",
+        "manifest": None,
+        "renderingStatus": "not-run",
+    }
+    evidence_record = aggregate.setdefault("evidence", {})
+    if not isinstance(evidence_record, dict):
+        raise media.MediaError("acceptance child evidence record is malformed")
+    evidence_record["recording"] = {
+        "optIn": True,
+        "rawCastPublic": False,
+        "terminal": {"columns": media.TERMINAL_COLUMNS, "rows": media.TERMINAL_ROWS},
+        "commandExitCode": command_exit_code,
+    }
+    _mark_media_failure(aggregate, error, command_exit_code)
+    try:
+        write_json(evidence_root / "manifest.json", aggregate, public=True)
+        write_checksums(evidence_root)
+    except OSError as exc:
+        raise media.MediaError(
+            "media failure could not be integrated into acceptance evidence",
+            command_exit_code=command_exit_code,
+        ) from exc
+    return aggregate
+
+
+def _finish_recorded_failure(
+    evidence_root: Path,
+    args: argparse.Namespace,
+    tools: media.MediaTools,
+    error: media.MediaError,
+    command_exit_code: int | None,
+) -> int:
+    """Persist and report a post-child media failure without masking child exit."""
+    if error.command_exit_code is None:
+        error.command_exit_code = command_exit_code
+    aggregate: dict[str, Any] | None = None
+    try:
+        media_manifest, media_manifest_path = media.write_failure_manifest(
+            evidence_root,
+            command_exit_code=command_exit_code,
+            tools=tools,
+            error=error,
+            require_render=args.require_media_render,
+            idle_limit_seconds=args.media_idle_limit_seconds,
+            playback_speed=args.media_speed,
+        )
+        aggregate = _integrate_media(
+            evidence_root,
+            media_manifest=media_manifest,
+            media_manifest_path=media_manifest_path,
+            media_error=error,
+            command_exit_code=command_exit_code,
+        )
+    except media.MediaError as persistence_error:
+        print(f"accept-gpu: {persistence_error}", file=sys.stderr)
+        try:
+            aggregate = _persist_media_failure_without_manifest(
+                evidence_root,
+                error=error,
+                command_exit_code=command_exit_code,
+            )
+        except media.MediaError as fallback_error:
+            print(f"accept-gpu: {fallback_error}", file=sys.stderr)
+    if aggregate is not None:
+        rendered = json.dumps(aggregate, indent=2, sort_keys=True)
+        if not privacy_violations(rendered):
+            print(rendered)
+            print(f"[accept-gpu] evidence: {evidence_root}", file=sys.stderr)
+    print(f"accept-gpu: {error}", file=sys.stderr)
+    return error.effective_exit_code
+
+
+def _run_recorded_acceptance(args: argparse.Namespace, argv: Sequence[str]) -> int:
+    if args.record_dir is None:
+        print("accept-gpu: --record-media requires --record-dir", file=sys.stderr)
+        return 2
+    evidence_root = args.record_dir.expanduser().resolve()
+    problem = _record_path_error(evidence_root)
+    if problem:
+        print(f"accept-gpu: {problem}", file=sys.stderr)
+        return 2
+    try:
+        tools = media.detect_tools(require_render=args.require_media_render)
+    except media.MediaError as exc:
+        print(f"accept-gpu: {exc}", file=sys.stderr)
+        return exc.code
+
+    command_exit_code: int | None = None
+    recording_error: media.MediaError | None = None
+    invocation_cwd = Path.cwd()
+    with tempfile.TemporaryDirectory(prefix="bonsai-acceptance-media-") as staging_text:
+        staging = Path(staging_text)
+        raw_cast = staging / media.RAW_CAST_NAME
+        status_path = staging / media.STATUS_NAME
+        child_env = os.environ.copy()
+        child_env[_SUPPRESS_FINAL_ENV] = "1"
+        child_command = [
+            sys.executable,
+            str(ROOT / "scripts" / "accept-gpu.py"),
+            *_media_child_argv(argv),
+        ]
+        try:
+            command_exit_code = media.record_command(
+                child_command,
+                raw_cast=raw_cast,
+                status_path=status_path,
+                tools=tools,
+                cwd=invocation_cwd,
+                env=child_env,
+            )
+        except media.MediaError as exc:
+            recording_error = exc
+            command_exit_code = exc.command_exit_code
+        expected_evidence = [
+            evidence_root / "manifest.json",
+            *(evidence_root / namespace for namespace in ("raw", "public", "bundle", "verification")),
+        ]
+        if not evidence_root.is_dir() or not all(path.exists() for path in expected_evidence):
+            evidence_error = recording_error or media.MediaError(
+                "recorded acceptance did not create its complete evidence directory",
+                command_exit_code=command_exit_code,
+            )
+            if (evidence_root / "manifest.json").is_file():
+                try:
+                    child_aggregate = _read_acceptance_aggregate(evidence_root)
+                    if command_exit_code is None:
+                        command_exit_code = _recorded_child_exit(child_aggregate)
+                    evidence_error.command_exit_code = command_exit_code
+                    return _finish_recorded_failure(
+                        evidence_root, args, tools, evidence_error, command_exit_code,
+                    )
+                except media.MediaError:
+                    pass
+            print(f"accept-gpu: {evidence_error}", file=sys.stderr)
+            return evidence_error.effective_exit_code
+        try:
+            child_aggregate = _read_acceptance_aggregate(evidence_root)
+        except media.MediaError as exc:
+            print(f"accept-gpu: {exc}", file=sys.stderr)
+            if recording_error is not None:
+                return recording_error.effective_exit_code
+            return command_exit_code or exc.code
+        if command_exit_code is None:
+            command_exit_code = _recorded_child_exit(child_aggregate)
+            if recording_error is not None:
+                recording_error.command_exit_code = command_exit_code
+        raw_destination = evidence_root / "raw" / media.RAW_CAST_NAME
+        status_destination = evidence_root / "raw" / media.STATUS_NAME
+        try:
+            if not raw_cast.is_file() or not status_path.is_file():
+                raise media.MediaError(
+                    "recording did not retain its private cast and status",
+                    command_exit_code=command_exit_code,
+                )
+            shutil.copy2(raw_cast, raw_destination)
+            shutil.copy2(status_path, status_destination)
+            os.chmod(raw_destination, 0o600)
+            os.chmod(status_destination, 0o600)
+        except (OSError, media.MediaError):
+            if recording_error is None:
+                recording_error = media.MediaError(
+                    "could not retain private recording artifacts",
+                    command_exit_code=command_exit_code,
+                )
+
+    if recording_error is not None:
+        return _finish_recorded_failure(
+            evidence_root, args, tools, recording_error, command_exit_code,
+        )
+
+    private_paths = (
+        Path(args.notary_home).expanduser().resolve(),
+        Path(args.engine_dir).expanduser().resolve(),
+        ROOT,
+        evidence_root,
+        Path.home(),
+    )
+    publication_error: media.MediaError | None = None
+    try:
+        media_manifest, media_manifest_path = media.publish_recording(
+            evidence_root,
+            command_exit_code=command_exit_code,
+            tools=tools,
+            private_paths=private_paths,
+            require_render=args.require_media_render,
+            idle_limit_seconds=args.media_idle_limit_seconds,
+            playback_speed=args.media_speed,
+        )
+    except media.MediaError as exc:
+        publication_error = exc
+        if exc.manifest is None or exc.manifest_path is None:
+            return _finish_recorded_failure(
+                evidence_root, args, tools, exc, command_exit_code,
+            )
+        media_manifest = exc.manifest
+        media_manifest_path = exc.manifest_path
+    try:
+        aggregate = _integrate_media(
+            evidence_root,
+            media_manifest=media_manifest,
+            media_manifest_path=media_manifest_path,
+            media_error=publication_error,
+            command_exit_code=command_exit_code,
+        )
+    except media.MediaError as exc:
+        return _finish_recorded_failure(
+            evidence_root, args, tools, exc, command_exit_code,
+        )
+    rendered = json.dumps(aggregate, indent=2, sort_keys=True)
+    if privacy_violations(rendered):
+        return _finish_recorded_failure(
+            evidence_root,
+            args,
+            tools,
+            media.MediaError(
+                "refusing manifest with private material",
+                command_exit_code=command_exit_code,
+            ),
+            command_exit_code,
+        )
+    print(rendered)
+    print(f"[accept-gpu] evidence: {evidence_root}", file=sys.stderr)
+    if command_exit_code not in (None, 0):
+        return command_exit_code
+    return publication_error.effective_exit_code if publication_error else 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(argv_list)
+    if args.artifact is None:
+        args.artifact = str(
+            Path(args.notary_home).expanduser()
+            / "models" / "Bonsai-27B-Q1_0-int-qwen35.safetensors"
+        )
+    args.prompt = FIXED_PROMPT
+    if args.require_media_render and not args.record_media:
+        print("accept-gpu: --require-media-render requires --record-media", file=sys.stderr)
+        return 2
+    if args.record_media and args.record_dir is None:
+        print("accept-gpu: --record-media requires --record-dir", file=sys.stderr)
+        return 2
+    if args.dry_run:
+        print(json.dumps({
+            "schema": SCHEMA,
+            "dryRun": True,
+            "gpuRequired": True,
+            "cpuThreads": args.cpu_threads,
+            "maxGpuProofBytes": args.max_gpu_proof_bytes,
+            "commandTimeoutSeconds": args.command_timeout_seconds,
+            "verifierPolicy": str(args.verifier_policy) if args.verifier_policy else None,
+            "recordDir": str(args.record_dir) if args.record_dir else None,
+            "media": {
+                "record": args.record_media,
+                "renderRequired": args.require_media_render,
+                "terminal": {"columns": media.TERMINAL_COLUMNS, "rows": media.TERMINAL_ROWS},
+                "idleLimitAppliedOnlyDuringRendering": True,
+            },
+            "phases": [
+                "prerequisites", "gpu-identity", "cuda-availability", "telemetry-start",
+                "cuda-parity", "signer-metadata", "one-token-receipt", "producer-report", "bundle",
+                "bundle-verification", "verifier-report",
+                "telemetry-stop",
+            ],
+            "networkBroadcastAttempted": False,
+        }, indent=2, sort_keys=True))
+        return 0
+    if args.record_media:
+        return _run_recorded_acceptance(args, argv_list)
+    return _run_acceptance(args)
 
 
 if __name__ == "__main__":

@@ -126,6 +126,10 @@ into `$BONSAI_NOTARY_HOME/models`, or reuses a verified local checkout via `BONS
 ./scripts/accept-gpu.py --cpu-threads 20 \
   --record-dir "$BONSAI_NOTARY_HOME/acceptance/run-001"
 
+# same gate plus a fixed-size, privacy-gated terminal cast and automatic GIF/MP4 when tools exist
+./scripts/accept-gpu.py --cpu-threads 20 \
+  --record-dir "$BONSAI_NOTARY_HOME/acceptance/run-002" --record-media
+
 # resumable on-chain agent identity (driven through chain_c/build/agentd)
 ./bonsai-agent status
 ./bonsai-agent deploy --ricardian-hash <64hex>                          # DRY-RUN unless --confirm
